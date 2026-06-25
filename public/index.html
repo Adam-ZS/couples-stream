@@ -986,6 +986,7 @@ function loadStream(url, streamInfo) {
       document.getElementById('playBtn').innerHTML = '▶';
       showToast('Stream error — try another source');
     };
+    video.onstalled = () => { document.getElementById('npStatus').textContent = 'stalled'; };
     currentStreamUrl = directUrl;
     return;
   }
