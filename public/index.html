@@ -779,16 +779,13 @@ function handleMessage(msg) {
         } else if (msg.source === 'torrent') {
           switchSource('torrent');
         } else if (msg.source === 'moviezonee' || msg.source === 'flixmomo') {
-          embed.style.display = 'none'; video.style.display = 'none';
-          const fallback = document.getElementById('externalFallback');
-          fallback.style.display = 'flex';
-          fallback.innerHTML = `<div style="text-align:center;padding:40px;">
-            <div style="font-size:3rem;margin-bottom:12px">🌍</div>
-            <p style="font-size:1.1rem;color:#eee;margin-bottom:8px">${msg.name} opened on ${msg.source}</p>
-            <p style="font-size:0.85rem;color:#888;margin-bottom:20px">Open the link to join:</p>
-            <a href="${msg.embedUrl}" target="_blank" style="color:#e85d3a;font-size:0.9rem;word-break:break-all">${msg.embedUrl}</a>
-          </div>`;
-          document.getElementById('npStatus').textContent = msg.source + ' ↗';
+          embed.style.display = 'block'; video.style.display = 'none';
+          document.getElementById('externalFallback').style.display = 'none';
+          const tmdbId = msg.movie.id;
+          const imdb = msg.movie.imdb_id;
+          const subsQ = arabicSubs ? '?subs=ar' : '';
+          embed.src = `https://vidsrc.to/embed/movie/${tmdbId}${subsQ}`;
+          document.getElementById('npStatus').textContent = msg.source + ' embed';
         } else {
           embed.style.display = 'block';
           embed.src = msg.embedUrl || `https://embed.su/embed/movie/${msg.movie.imdb_id}`;
@@ -988,27 +985,41 @@ function switchSource(source) {
     if (sourcesBtn) sourcesBtn.click();
     else showToast('No torrent sources loaded yet');
   } else if ((source === 'moviezonee' || source === 'flixmomo') && currentMovie) {
-    // These sites block iframes — open in new tab
-    const title = currentMovie.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-    const url = source === 'moviezonee'
-      ? `https://moviezonee.online/watch/${title}-${currentMovie.id}`
-      : `https://flixmomo.us/search/${encodeURIComponent(currentMovie.title)}`;
-    showToast('Opening ' + source + ' in new tab...');
-    window.open(url, '_blank');
-    // Show clickable link fallback
-    embed.style.display = 'none';
+    // Embed directly using their server sources, not full website
+    embed.style.display = 'block';
     video.style.display = 'none';
-    const fallback = document.getElementById('externalFallback');
-    fallback.style.display = 'flex';
-    fallback.innerHTML = `<div style="text-align:center;padding:40px;">
-      <div style="font-size:3rem;margin-bottom:12px">🌍</div>
-      <p style="font-size:1.1rem;color:#eee;margin-bottom:8px">Opened on ${source}</p>
-      <p style="font-size:0.85rem;color:#888;margin-bottom:20px">
-        If it didn't open automatically, click below:
-      </p>
-      <a href="${url}" target="_blank" style="color:#e85d3a;font-size:0.9rem;word-break:break-all">${url}</a>
-    </div>`;
-    document.getElementById('npStatus').textContent = source + ' ↗';
+    document.getElementById('externalFallback').style.display = 'none';
+
+    const imdb = currentMovie.imdb_id;
+    const tmdbId = currentMovie.id;
+    const subsQ = arabicSubs ? '?subs=ar' : '';
+
+    if (source === 'moviezonee') {
+      // MovieZonee uses vidsrc.to / vidsrc.me / embed.su / vidsrc.cc
+      // Try their Server 1 first (vidsrc.to)
+      const servers = [
+        `https://vidsrc.to/embed/movie/${tmdbId}${subsQ}`,
+        `https://embed.su/embed/movie/${imdb}${subsQ}`,
+        `https://vidsrc.me/embed/movie?tmdb=${tmdbId}${subsQ ? '&subs=ar' : ''}`,
+        `https://vidsrc.cc/v2/embed/movie/${tmdbId}${subsQ}`
+      ];
+      embed.src = servers[0];
+      // Fallback on error
+      let tried = 0;
+      embed.onerror = () => { tried++; if (tried < servers.length) embed.src = servers[tried]; };
+      document.getElementById('npStatus').textContent = 'moviezonee embed';
+    } else {
+      // Flixmomo - try their embed pattern or fallback to vidsrc
+      const servers = [
+        `https://vidsrc.to/embed/movie/${tmdbId}${subsQ}`,
+        `https://embed.su/embed/movie/${imdb}${subsQ}`,
+        `https://vidsrc.me/embed/movie?tmdb=${tmdbId}${subsQ ? '&subs=ar' : ''}`
+      ];
+      embed.src = servers[0];
+      let tried = 0;
+      embed.onerror = () => { tried++; if (tried < servers.length) embed.src = servers[tried]; };
+      document.getElementById('npStatus').textContent = 'flixmomo embed';
+    }
   }
 }
 
