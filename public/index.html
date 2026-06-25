@@ -301,12 +301,11 @@
   .video-container{
     flex:1;display:none;position:relative;
     background:#000;overflow:hidden;
+    flex-direction:column;
   }
-  .video-container video{
-    width:100%;height:100%;object-fit:contain;
-  }
-  .video-container iframe{
-    width:100%;height:100%;border:none;
+  .video-container video,.video-container iframe{
+    width:100%;height:100%;object-fit:contain;flex:1;
+    border:none;
   }
 
   /* Player tabs */
@@ -536,6 +535,7 @@
       <div class="video-container" id="videoContainer">
         <iframe id="embedPlayer" allowfullscreen allow="autoplay; fullscreen" sandbox="allow-same-origin allow-scripts allow-forms allow-popups"></iframe>
         <video id="videoPlayer" crossorigin="anonymous" style="display:none"></video>
+        <div id="externalFallback" style="display:none;align-items:center;justify-content:center;flex:1;background:#0e0e10"></div>
         <div class="controls" id="controls">
           <button id="playBtn" onclick="togglePlay()">▶</button>
           <div class="time-bar">
@@ -760,6 +760,48 @@ function handleMessage(msg) {
     case 'chat':
       addChatMsg(msg.name, msg.message);
       break;
+    case 'select_movie':
+      // Sync movie selection from host
+      if (msg.name !== userName && msg.movie) {
+        currentMovie = msg.movie;
+        document.getElementById('placeholder').style.display = 'none';
+        document.getElementById('videoContainer').style.display = 'flex';
+        document.getElementById('playerTabs').classList.add('show');
+        document.getElementById('nowPlaying').style.display = 'flex';
+        document.getElementById('npTitle').textContent = msg.movie.title + (msg.movie.year ? ' ('+msg.movie.year+')' : '');
+        document.getElementById('npStatus').textContent = 'loading...';
+
+        if (msg.source === 'embed') {
+          embed.style.display = 'block'; video.style.display = 'none';
+          document.getElementById('externalFallback').style.display = 'none';
+          embed.src = msg.embedUrl || `https://embed.su/embed/movie/${msg.movie.imdb_id}`;
+          document.getElementById('npStatus').textContent = 'embed player';
+        } else if (msg.source === 'torrent') {
+          switchSource('torrent');
+        } else if (msg.source === 'moviezonee' || msg.source === 'flixmomo') {
+          embed.style.display = 'none'; video.style.display = 'none';
+          const fallback = document.getElementById('externalFallback');
+          fallback.style.display = 'flex';
+          fallback.innerHTML = `<div style="text-align:center;padding:40px;">
+            <div style="font-size:3rem;margin-bottom:12px">🌍</div>
+            <p style="font-size:1.1rem;color:#eee;margin-bottom:8px">${msg.name} opened on ${msg.source}</p>
+            <p style="font-size:0.85rem;color:#888;margin-bottom:20px">Open the link to join:</p>
+            <a href="${msg.embedUrl}" target="_blank" style="color:#e85d3a;font-size:0.9rem;word-break:break-all">${msg.embedUrl}</a>
+          </div>`;
+          document.getElementById('npStatus').textContent = msg.source + ' ↗';
+        } else {
+          embed.style.display = 'block';
+          embed.src = msg.embedUrl || `https://embed.su/embed/movie/${msg.movie.imdb_id}`;
+        }
+
+        // Update tab UI
+        document.querySelectorAll('.player-tabs button').forEach(b => {
+          b.classList.toggle('active', b.dataset.source === (msg.source || 'embed'));
+        });
+
+        showToast(msg.name + ' selected: ' + msg.movie.title);
+      }
+      break;
     case 'countdown':
       showToast('🎬 ' + msg.name + ' said: ' + msg.text);
       break;
@@ -870,7 +912,12 @@ async function selectMovie(movie) {
   document.getElementById('npTitle').textContent = movie.title + (movie.year ? ' ('+movie.year+')' : '');
   document.getElementById('npStatus').textContent = 'loading...';
 
-  // Default to embed player
+  const embedUrl = `https://embed.su/embed/movie/${movie.imdb_id}${arabicSubs ? '?subs=ar' : ''}`;
+
+  // Broadcast to room
+  sendWS({ type: 'select_movie', movie: movie, embedUrl: embedUrl, source: 'embed' });
+
+  // Switch to embed player
   switchSource('embed');
   loadEmbed(movie);
 
@@ -910,6 +957,15 @@ function onEmbedFail() {
 function switchSource(source) {
   currentSource = source;
 
+  // Broadcast source change to room
+  if (currentMovie) {
+    const title = currentMovie.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    let url = '';
+    if (source === 'moviezonee') url = `https://moviezonee.online/watch/${title}-${currentMovie.id}`;
+    else if (source === 'flixmomo') url = `https://flixmomo.us/search/${encodeURIComponent(currentMovie.title)}`;
+    sendWS({ type: 'select_movie', movie: currentMovie, source: source, embedUrl: url });
+  }
+
   // Update tab UI
   document.querySelectorAll('.player-tabs button').forEach(b => {
     b.classList.toggle('active', b.dataset.source === source);
@@ -928,19 +984,31 @@ function switchSource(source) {
     video.style.display = 'block';
     document.getElementById('streamSelector').style.display = 'block';
     document.getElementById('npStatus').textContent = 'torrent mode';
-    // Trigger torrent stream loading
     const sourcesBtn = document.querySelector('#sourcesList button');
     if (sourcesBtn) sourcesBtn.click();
     else showToast('No torrent sources loaded yet');
   } else if ((source === 'moviezonee' || source === 'flixmomo') && currentMovie) {
-    embed.style.display = 'block';
+    // These sites block iframes — open in new tab
     const title = currentMovie.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-    if (source === 'moviezonee') {
-      embed.src = `https://moviezonee.online/watch/${title}-${currentMovie.id}`;
-    } else {
-      embed.src = `https://flixmomo.us/search/${encodeURIComponent(currentMovie.title)}`;
-    }
-    document.getElementById('npStatus').textContent = source;
+    const url = source === 'moviezonee'
+      ? `https://moviezonee.online/watch/${title}-${currentMovie.id}`
+      : `https://flixmomo.us/search/${encodeURIComponent(currentMovie.title)}`;
+    showToast('Opening ' + source + ' in new tab...');
+    window.open(url, '_blank');
+    // Show clickable link fallback
+    embed.style.display = 'none';
+    video.style.display = 'none';
+    const fallback = document.getElementById('externalFallback');
+    fallback.style.display = 'flex';
+    fallback.innerHTML = `<div style="text-align:center;padding:40px;">
+      <div style="font-size:3rem;margin-bottom:12px">🌍</div>
+      <p style="font-size:1.1rem;color:#eee;margin-bottom:8px">Opened on ${source}</p>
+      <p style="font-size:0.85rem;color:#888;margin-bottom:20px">
+        If it didn't open automatically, click below:
+      </p>
+      <a href="${url}" target="_blank" style="color:#e85d3a;font-size:0.9rem;word-break:break-all">${url}</a>
+    </div>`;
+    document.getElementById('npStatus').textContent = source + ' ↗';
   }
 }
 
