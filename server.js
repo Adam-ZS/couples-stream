@@ -350,6 +350,45 @@ function streamFileToResponse(file, req, res) {
   });
 }
 
+// ---- Proxy for direct URL streams (bypass CORS/referrer issues) ----
+app.get('/api/proxy', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).send('Need ?url=');
+
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Referer': 'https://couples-stream.onrender.com/',
+        'Accept': 'video/*,*/*'
+      }
+    });
+
+    if (!resp.ok) {
+      return res.status(resp.status).send('Upstream error');
+    }
+
+    // Forward content headers
+    const contentType = resp.headers.get('content-type') || 'video/mp4';
+    const contentLength = resp.headers.get('content-length');
+
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Content-Length': contentLength || '',
+      'Accept-Ranges': 'bytes',
+      'Access-Control-Allow-Origin': '*'
+    });
+
+    // Stream the response body
+    for await (const chunk of resp.body) {
+      res.write(chunk);
+    }
+    res.end();
+  } catch (e) {
+    res.status(500).send('Proxy error: ' + e.message);
+  }
+});
+
 // ---- HTTP Server ----
 const server = http.createServer(app);
 

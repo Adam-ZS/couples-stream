@@ -965,11 +965,12 @@ function loadStream(url, streamInfo) {
   }
 
   if (isDirectUrl) {
-    // Direct HTTP stream — play straight from the URL
+    // Direct HTTP stream — play through server proxy (bypass CORS/referrer)
     const directUrl = streamInfo.url;
+    const proxiedUrl = `/api/proxy?url=${encodeURIComponent(directUrl)}`;
     document.getElementById('loadingText').textContent = 'Loading stream...';
     document.getElementById('playBtn').innerHTML = '⏳';
-    video.src = directUrl;
+    video.src = proxiedUrl;
     video.load();
     video.oncanplay = () => {
       document.getElementById('loadingStream').style.display = 'none';
