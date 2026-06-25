@@ -1188,11 +1188,14 @@ function loadSyncStream(streamInfo) {
       if (!isM3u8 || !Hls.isSupported()) {
         loading.style.display = 'none';
         document.getElementById('npStatus').textContent = 'streaming';
-        video.play().catch(() => {});
-        isPlaying = true; playerReady = true;
-        updatePlayBtn();
-        sendWS({ type: 'play', time: 0 });
-        showToast('Stream ready — sync active');
+        if (document.getElementById('customUrlInput').style.display !== 'block') {
+          // Auto-play
+          video.play().catch(() => {});
+          isPlaying = true; playerReady = true;
+          updatePlayBtn();
+          sendWS({ type: 'play', time: 0 });
+          showToast('Sync active — controls synced');
+        }
       }
     };
     video.onerror = () => {
