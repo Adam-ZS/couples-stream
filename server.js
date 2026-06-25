@@ -3,7 +3,7 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const path = require('path');
 
-const PORT = 8765;
+const PORT = process.env.PORT || 8765;
 const TMDB_KEY = '8265bd1679663a7ea12ac168da84d2e8';
 const TORRENTIO_BASE = 'https://torrentio.strem.fun';
 const TPB_BASE = 'https://thepiratebay-plus.strem.fun';
