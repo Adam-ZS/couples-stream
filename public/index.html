@@ -772,6 +772,28 @@ function handleMessage(msg) {
     case 'chat':
       addChatMsg(msg.name, msg.message);
       break;
+    case 'load_stream':
+      // Partner selected a torrent source — load same one
+      if (msg.name !== userName && msg.infoHash) {
+        showToast('Loading stream from ' + msg.name);
+        switchSource('torrent');
+        // Find the matching source in the list and click it
+        const btns = document.querySelectorAll('#sourcesList button');
+        for (const b of btns) {
+          if (b.textContent.includes(msg.name.substring(0,20))) {
+            b.click(); break;
+          }
+        }
+        // Fallback: load directly
+        loadSyncStream({ infoHash: msg.infoHash, name: msg.name || 'Shared' });
+      }
+      break;
+    case 'embed_sync':
+      // Relay from embed video player via postMessage
+      if (msg.name !== userName && msg.action) {
+        console.log('[embed_sync]', msg.action, msg.time);
+      }
+      break;
     case 'select_movie':
       // Sync movie selection from host
       if (msg.name !== userName && msg.movie) {
@@ -1088,6 +1110,7 @@ async function fetchAndAutoPlaySync(movie) {
     // Show first 25 unique torrent sources
     const seen = new Set();
     let count = 0;
+    let firstBtn = null;
     for (const s of streams) {
       if (!s.infoHash) continue;
       const name = s.name || s.title || s.description || '?';
@@ -1103,9 +1126,22 @@ async function fetchAndAutoPlaySync(movie) {
         loadSyncStream(s);
         document.querySelectorAll('#sourcesList button').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        // Broadcast selected source to partner
+        sendWS({ type: 'load_stream', infoHash: s.infoHash, name: clean.substring(0,40) });
       };
       btn.title = `Magnet: ${s.infoHash.substring(0,20)}...`;
       sourcesEl.appendChild(btn);
+      if (!firstBtn) firstBtn = btn;
+    }
+
+    // Auto-play first source (user can click another)
+    if (firstBtn && streams.some(s => s.infoHash)) {
+      const firstSrc = streams.find(s => s.infoHash);
+      if (firstSrc) {
+        loadSyncStream(firstSrc);
+        firstBtn.classList.add('active');
+        sendWS({ type: 'load_stream', infoHash: firstSrc.infoHash, name: (firstSrc.name || firstSrc.title || 'video').substring(0,40) });
+      }
     }
 
     if (count === 0) {
