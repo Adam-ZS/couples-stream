@@ -238,6 +238,107 @@ app.get('/api/subs/search', async (req, res) => {
   }
 });
 
+// ---- Torrent Streaming (server-side WebTorrent) ----
+// WebTorrent v3 is ESM, loaded dynamically
+let _torrentClient = null;
+let _torrentsMap = null;
+
+async function getTorrentClient() {
+  if (!_torrentClient) {
+    const { default: WebTorrent } = await import('webtorrent');
+    _torrentClient = new WebTorrent();
+    _torrentsMap = new Map();
+  }
+  return _torrentClient;
+}
+
+app.get('/api/stream/torrent', async (req, res) => {
+  try {
+    const { infoHash, magnet } = req.query;
+    const torrentId = infoHash || magnet;
+    if (!torrentId) return res.status(400).send('Need infoHash or magnet');
+
+    const client = await getTorrentClient();
+    const normId = infoHash ? infoHash.toLowerCase() : null;
+    let entry = normId ? _torrentsMap.get(normId) : null;
+
+    if (entry && entry.ready) {
+      return serveTorrentFile(entry.torrent, req, res);
+    }
+
+    if (!entry) {
+      if (normId) _torrentsMap.set(normId, { ready: false, torrent: null });
+      client.add(torrentId, { path: '/tmp/couples-stream' }, (t) => {
+        console.log(`[torrent] Started: ${t.name}`);
+        if (normId) _torrentsMap.set(normId, { ready: true, torrent: t });
+        serveTorrentFile(t, req, res);
+      });
+      client.on('error', (err) => {
+        console.error('[torrent] Error:', err.message);
+        if (!res.headersSent) res.status(500).send('Torrent error: ' + err.message);
+      });
+    } else {
+      serveTorrentFile(entry.torrent, req, res);
+    }
+  } catch (e) {
+    console.error('[torrent] Fatal:', e.message);
+    if (!res.headersSent) res.status(500).send('Stream error: ' + e.message);
+  }
+});
+
+function serveTorrentFile(torrent, req, res) {
+  if (!torrent || !torrent.files) {
+    return res.status(500).send('Torrent not ready');
+  }
+
+  // Find best video file (largest video)
+  const file = torrent.files
+    .filter(f => /\.(mp4|mkv|avi|mov|webm|m4v)$/i.test(f.name))
+    .sort((a, b) => b.length - a.length)[0];
+
+  if (!file) {
+    // Fallback: largest file that might be playable
+    const fallback = torrent.files.sort((a, b) => b.length - a.length)[0];
+    if (!fallback) return res.status(404).send('No files in torrent');
+    return streamFileToResponse(fallback, req, res);
+  }
+
+  streamFileToResponse(file, req, res);
+}
+
+function streamFileToResponse(file, req, res) {
+  const range = req.headers.range;
+  const fileSize = file.length;
+
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunkSize = (end - start) + 1;
+
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunkSize,
+      'Content-Type': 'video/mp4',
+      'Access-Control-Allow-Origin': '*'
+    });
+    file.createReadStream({ start, end }).pipe(res);
+  } else {
+    res.writeHead(200, {
+      'Content-Length': fileSize,
+      'Content-Type': 'video/mp4',
+      'Accept-Ranges': 'bytes',
+      'Access-Control-Allow-Origin': '*'
+    });
+    file.createReadStream().pipe(res);
+  }
+
+  req.on('close', () => {
+    // Client disconnected — stream is cleaned up automatically
+  });
+}
+
 // ---- HTTP Server ----
 const server = http.createServer(app);
 

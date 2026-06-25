@@ -1,0 +1,11 @@
+# couples.stream
+# Deploy on Render: https://render.com/deploy
+
+services:
+  - type: web
+    name: couples-stream
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /
