@@ -49,13 +49,16 @@ app.get('/api/search', async (req, res) => {
 });
 
 // Stream sources: Torrentio + ThePirateBay+
-const FETCH_TIMEOUT = 8000; // 8s max per source
+const FETCH_TIMEOUT = 15000; // 15s max per source
 
 async function fetchWithTimeout(url, timeoutMs = FETCH_TIMEOUT) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(url, { signal: ctrl.signal });
+    const r = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' }
+    });
     return await r.json();
   } finally {
     clearTimeout(timer);
