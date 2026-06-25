@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>couples.stream</title>
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --surface: #1a1a1a;
+    --surface2: #252525;
+    --accent: #e85d3a;
+    --accent2: #ff8c5a;
+    --text: #eee;
+    --text2: #999;
+    --radius: 8px;
+    --shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* === LOGIN SCREEN === */
+  #loginScreen {
+    display: flex;
+    align-items: center; justify-content: center;
+    height: 100vh;
+    background: radial-gradient(ellipse at center, #1a1a1a 0%, #0a0a0a 100%);
+  }
+  #loginScreen .box {
+    background: var(--surface);
+    padding: 40px;
+    border-radius: 12px;
+    width: 360px;
+    box-shadow: var(--shadow);
+  }
+  #loginScreen h1 {
+    font-size: 1.8rem; font-weight: 700;
+    margin-bottom: 4px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  #loginScreen p { color: var(--text2); font-size: 0.9rem; margin-bottom: 24px; }
+  #loginScreen label { display: block; font-size: 0.85rem; color: var(--text2); margin-bottom: 4px; }
+  #loginScreen input {
+    width: 100%; padding: 10px 14px;
+    background: var(--surface2); border: 1px solid #333; border-radius: 6px;
+    color: var(--text); font-size: 1rem; margin-bottom: 16px;
+    outline: none; transition: border 0.2s;
+  }
+  #loginScreen input:focus { border-color: var(--accent); }
+  #loginScreen button {
+    width: 100%; padding: 12px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; border-radius: 6px;
+    color: #fff; font-size: 1rem; font-weight: 600;
+    cursor: pointer; transition: opacity 0.2s;
+  }
+  #loginScreen button:hover { opacity: 0.9; }
+
+  /* === MAIN LAYOUT === */
+  #app { display: none; height: 100vh; flex-direction: column; }
+  .top-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid #222;
+    flex-shrink: 0;
+  }
+  .top-bar .brand {
+    font-weight: 700; font-size: 1.1rem;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    white-space: nowrap;
+  }
+  .top-bar .room-badge {
+    background: var(--surface2); padding: 4px 12px;
+    border-radius: 20px; font-size: 0.8rem; color: var(--text2);
+  }
+  .search-box {
+    flex: 1; position: relative; max-width: 500px;
+  }
+  .search-box input {
+    width: 100%; padding: 8px 14px;
+    background: var(--surface2); border: 1px solid #333; border-radius: 20px;
+    color: var(--text); font-size: 0.9rem; outline: none;
+  }
+  .search-box input:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: 100%; left: 0; right: 0;
+    background: var(--surface); border: 1px solid #333; border-radius: 8px;
+    margin-top: 4px; max-height: 400px; overflow-y: auto;
+    z-index: 100; display: none;
+  }
+  .search-results .item {
+    display: flex; gap: 10px; padding: 10px; cursor: pointer;
+    border-bottom: 1px solid #222; transition: background 0.15s;
+  }
+  .search-results .item:hover { background: var(--surface2); }
+  .search-results .item img {
+    width: 40px; height: 60px; object-fit: cover; border-radius: 4px;
+    background: #333;
+  }
+  .search-results .item .info { flex: 1; }
+  .search-results .item .title { font-weight: 600; font-size: 0.9rem; }
+  .search-results .item .meta { font-size: 0.8rem; color: var(--text2); }
+  .search-results .item .ov { font-size: 0.75rem; color: #777; margin-top: 2px; }
+
+  .users-online {
+    display: flex; align-items: center; gap: 6px;
+    color: var(--text2); font-size: 0.85rem; white-space: nowrap;
+  }
+  .users-online .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #4ade80; display: inline-block;
+  }
+
+  /* === MAIN CONTENT === */
+  .main-content {
+    display: flex; flex: 1; overflow: hidden;
+  }
+  .player-section {
+    flex: 1; display: flex; flex-direction: column;
+    position: relative; background: #000;
+  }
+
+  /* No movie selected */
+  .placeholder {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; color: var(--text2);
+  }
+  .placeholder .icon { font-size: 3rem; opacity: 0.3; }
+  .placeholder p { font-size: 1.1rem; }
+
+  /* Video Player */
+  .video-container {
+    flex: 1; display: none; position: relative;
+    background: #000; overflow: hidden;
+  }
+  .video-container video {
+    width: 100%; height: 100%; object-fit: contain;
+  }
+  .controls {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    padding: 40px 16px 12px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.9));
+    display: flex; align-items: center; gap: 12px;
+    opacity: 0; transition: opacity 0.3s;
+  }
+  .video-container:hover .controls { opacity: 1; }
+  .controls button {
+    background: none; border: none; color: #fff;
+    cursor: pointer; font-size: 1.3rem; padding: 4px;
+    line-height: 1;
+  }
+  .controls .time-bar { flex: 1; position: relative; }
+  .controls .time-bar input[type="range"] {
+    width: 100%; height: 4px; -webkit-appearance: none;
+    background: #555; border-radius: 2px; outline: none;
+    cursor: pointer;
+  }
+  .controls .time-bar input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--accent); cursor: pointer;
+  }
+  .controls .time-display { font-size: 0.8rem; color: #ccc; min-width: 100px; text-align: right; }
+  .controls .sync-indicator {
+    font-size: 0.7rem; color: #4ade80; padding: 2px 8px;
+    border-radius: 10px; background: rgba(74,222,128,0.15);
+    display: none;
+  }
+
+  /* Stream source selector */
+  .stream-selector {
+    display: none; overflow-y: auto; max-height: 120px;
+    background: var(--surface); border-top: 1px solid #333;
+  }
+  .stream-selector .title {
+    padding: 8px 16px; font-size: 0.8rem; color: var(--text2);
+    font-weight: 600; text-transform: uppercase; letter-spacing: 1px;
+  }
+  .stream-selector .sources { display: flex; gap: 8px; padding: 0 16px 10px; flex-wrap: wrap; }
+  .stream-selector .sources button {
+    background: var(--surface2); border: 1px solid #444; border-radius: 6px;
+    padding: 6px 14px; color: var(--text); font-size: 0.8rem;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .stream-selector .sources button:hover {
+    border-color: var(--accent); color: var(--accent);
+  }
+  .stream-selector .sources button.active {
+    border-color: var(--accent); background: rgba(232,93,58,0.15);
+    color: var(--accent);
+  }
+  .loading-stream {
+    display: none; padding: 20px; text-align: center; color: var(--text2);
+    font-size: 0.9rem;
+  }
+
+  /* === CHAT SIDEBAR === */
+  .chat-sidebar {
+    width: 300px; background: var(--surface);
+    border-left: 1px solid #222;
+    display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  .chat-sidebar .header {
+    padding: 12px 16px; font-size: 0.85rem; font-weight: 600;
+    border-bottom: 1px solid #222; color: var(--text2);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .chat-sidebar .header .count { font-size: 0.75rem; color: #555; }
+  .chat-messages {
+    flex: 1; overflow-y: auto; padding: 8px 12px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .chat-messages .msg {
+    font-size: 0.85rem; line-height: 1.4; word-break: break-word;
+  }
+  .chat-messages .msg .name {
+    font-weight: 600; color: var(--accent2); margin-right: 6px;
+  }
+  .chat-messages .msg .name.self { color: #4ade80; }
+  .chat-messages .msg .time {
+    font-size: 0.65rem; color: #555; margin-left: 6px;
+  }
+  .chat-messages .sys-msg {
+    font-size: 0.75rem; color: #555; text-align: center; padding: 2px 0;
+  }
+  .chat-sidebar .input-area {
+    display: flex; gap: 8px; padding: 10px 12px;
+    border-top: 1px solid #222;
+  }
+  .chat-sidebar .input-area input {
+    flex: 1; padding: 8px 12px;
+    background: var(--surface2); border: 1px solid #333; border-radius: 20px;
+    color: var(--text); font-size: 0.85rem; outline: none;
+  }
+  .chat-sidebar .input-area input:focus { border-color: var(--accent); }
+  .chat-sidebar .input-area button {
+    background: var(--accent); border: none; border-radius: 50%;
+    width: 34px; height: 34px; color: #fff; cursor: pointer;
+    font-size: 1.1rem; display: flex; align-items: center; justify-content: center;
+  }
+
+  /* === NOW PLAYING BAR === */
+  .now-playing {
+    display: none; padding: 8px 16px;
+    background: var(--surface2); border-top: 1px solid #333;
+    font-size: 0.85rem; align-items: center; gap: 10px;
+  }
+  .now-playing .np-title { font-weight: 600; }
+  .now-playing .np-status { color: #4ade80; font-size: 0.75rem; }
+
+  /* === RESPONSIVE === */
+  @media (max-width: 768px) {
+    .chat-sidebar { width: 240px; }
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--surface); border: 1px solid #333;
+    padding: 10px 20px; border-radius: 8px;
+    font-size: 0.85rem; color: var(--text);
+    box-shadow: var(--shadow); z-index: 999;
+    display: none; animation: fadeIn 0.3s;
+  }
+  @keyframes fadeIn { from{opacity:0;transform:translateX(-50%) translateY(10px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="loginScreen">
+  <div class="box">
+    <h1>couples.stream</h1>
+    <p>watch together, wherever</p>
+    <label>Your Name</label>
+    <input id="nameInput" placeholder="Enter your name..." maxlength="20" autofocus>
+    <label>Room Name</label>
+    <input id="roomInput" placeholder="e.g. our-movie-night" maxlength="30" value="couples">
+    <button onclick="login()">Join Room</button>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+  <!-- Top Bar -->
+  <div class="top-bar">
+    <span class="brand">couples.stream</span>
+    <span class="room-badge" id="roomBadge">#room</span>
+    <div class="search-box">
+      <input id="searchInput" placeholder="Search movies..." autocomplete="off">
+      <div class="search-results" id="searchResults"></div>
+    </div>
+    <div class="users-online">
+      <span class="dot"></span>
+      <span id="userCount">0</span>
+      <span style="font-size:0.8rem">online</span>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <!-- Player -->
+    <div class="player-section">
+      <div class="placeholder" id="placeholder">
+        <div class="icon">&#127910;</div>
+        <p>Search for a movie to start</p>
+        <span style="font-size:0.8rem;color:#555">you + partner watch in sync with chat</span>
+      </div>
+
+      <div class="video-container" id="videoContainer">
+        <video id="videoPlayer" crossorigin="anonymous"></video>
+        <div class="controls" id="controls">
+          <button id="playBtn" onclick="togglePlay()">&#9654;</button>
+          <div class="time-bar">
+            <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1"
+                   oninput="onSeekDrag()" onchange="onSeekEnd()">
+          </div>
+          <span class="time-display" id="timeDisplay">0:00 / 0:00</span>
+          <span class="sync-indicator" id="syncIndicator">&#10003; synced</span>
+        </div>
+      </div>
+
+      <div class="stream-selector" id="streamSelector">
+        <div class="title">Available Sources</div>
+        <div class="sources" id="sourcesList"></div>
+      </div>
+      <div class="loading-stream" id="loadingStream">
+        <span id="loadingText">Loading torrent...</span>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div class="chat-sidebar">
+      <div class="header">
+        <span>Room Chat</span>
+        <span class="count" id="userList">you + 0 others</span>
+      </div>
+      <div class="chat-messages" id="chatMessages"></div>
+      <div class="input-area">
+        <input id="chatInput" placeholder="Type a message..." maxlength="500">
+        <button onclick="sendChat()">&#10148;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Now Playing Bar -->
+  <div class="now-playing" id="nowPlaying">
+    <span class="np-title" id="npTitle">Not playing</span>
+    <span class="np-status" id="npStatus">idle</span>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ========== CONFIG ==========
+let WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+let ws = null;
+let userName = '';
+let roomName = '';
+let currentClientId = Math.random().toString(36).substring(2, 8);
+
+// ========== STATE ==========
+let isRemoteAction = false;
+let isPlaying = false;
+let currentTime = 0;
+let duration = 0;
+let seeking = false;
+let users = [];
+let currentMovie = null;
+let currentTorrent = null;
+let playerReady = false;
+let lastSyncTime = 0;
+
+// ========== LOGIN ==========
+function login() {
+  userName = document.getElementById('nameInput').value.trim() || 'User_' + currentClientId;
+  roomName = document.getElementById('roomInput').value.trim() || 'couples';
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('roomBadge').textContent = '#' + roomName;
+  connectWS();
+}
+
+// ========== WEBSOCKET ==========
+function connectWS() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'join', room: roomName, name: userName }));
+  };
+  ws.onmessage = (e) => {
+    try { handleMessage(JSON.parse(e.data)); } catch(err) {}
+  };
+  ws.onclose = () => {
+    setTimeout(connectWS, 2000);
+  };
+}
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'room_state':
+      users = msg.users || [];
+      updateUserList();
+      renderChatHistory(msg.chatHistory || []);
+      // Sync to current state
+      if (msg.state) {
+        if (msg.state.playing) {
+          isRemoteAction = true;
+          video.currentTime = msg.state.time;
+          video.play();
+          isPlaying = true;
+          updatePlayBtn();
+          setTimeout(() => { isRemoteAction = false; }, 500);
+        } else {
+          isRemoteAction = true;
+          video.currentTime = msg.state.time;
+          video.pause();
+          isPlaying = false;
+          updatePlayBtn();
+          setTimeout(() => { isRemoteAction = false; }, 500);
+        }
+      }
+      break;
+    case 'user_joined':
+      if (!users.includes(msg.name)) users.push(msg.name);
+      updateUserList();
+      addSystemMsg(`${msg.name} joined`);
+      break;
+    case 'user_left':
+      users = users.filter(u => u !== msg.name);
+      updateUserList();
+      addSystemMsg(`${msg.name} left`);
+      break;
+    case 'play':
+      if (!isRemoteAction) {
+        isRemoteAction = true;
+        video.currentTime = msg.time;
+        video.play();
+        isPlaying = true;
+        updatePlayBtn();
+        setTimeout(() => { isRemoteAction = false; }, 500);
+      }
+      break;
+    case 'pause':
+      if (!isRemoteAction) {
+        isRemoteAction = true;
+        video.currentTime = msg.time;
+        video.pause();
+        isPlaying = false;
+        updatePlayBtn();
+        setTimeout(() => { isRemoteAction = false; }, 500);
+      }
+      break;
+    case 'seek':
+      if (!isRemoteAction) {
+        isRemoteAction = true;
+        video.currentTime = msg.time;
+        setTimeout(() => { isRemoteAction = false; }, 500);
+      }
+      break;
+    case 'chat':
+      addChatMsg(msg.name, msg.message);
+      break;
+  }
+}
+
+function sendWS(msg) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+// ========== CHAT ==========
+function sendChat() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  sendWS({ type: 'chat', message: text });
+  input.value = '';
+}
+
+document.getElementById('chatInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendChat();
+});
+
+function addChatMsg(name, message) {
+  const el = document.createElement('div');
+  el.className = 'msg';
+  const isSelf = name === userName;
+  el.innerHTML = `<span class="name ${isSelf ? 'self' : ''}">${esc(name)}</span>${esc(message)}<span class="time">${fmtTimestamp(Date.now())}</span>`;
+  const container = document.getElementById('chatMessages');
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+}
+
+function addSystemMsg(text) {
+  const el = document.createElement('div');
+  el.className = 'sys-msg';
+  el.textContent = text;
+  const container = document.getElementById('chatMessages');
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+}
+
+function renderChatHistory(history) {
+  const container = document.getElementById('chatMessages');
+  container.innerHTML = '';
+  for (const m of history) {
+    if (m.type === 'chat') {
+      addChatMsg(m.name, m.message);
+    }
+  }
+}
+
+function updateUserList() {
+  document.getElementById('userCount').textContent = users.length;
+  const others = users.filter(u => u !== userName).length;
+  document.getElementById('userList').textContent = `you + ${others} other${others !== 1 ? 's' : ''}`;
+}
+
+// ========== SEARCH ==========
+const searchInput = document.getElementById('searchInput');
+const searchResults = document.getElementById('searchResults');
+let searchTimer = null;
+
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = searchInput.value.trim();
+  if (q.length < 2) { searchResults.style.display = 'none'; return; }
+  searchTimer = setTimeout(() => doSearch(q), 400);
+});
+
+searchInput.addEventListener('focus', () => {
+  if (searchResults.children.length > 0) searchResults.style.display = 'block';
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.search-box')) searchResults.style.display = 'none';
+});
+
+async function doSearch(q) {
+  try {
+    const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const data = await resp.json();
+    renderResults(data.results || []);
+  } catch(e) {
+    console.error('Search error:', e);
+  }
+}
+
+function renderResults(results) {
+  const el = document.getElementById('searchResults');
+  el.innerHTML = '';
+  if (results.length === 0) {
+    el.style.display = 'none';
+    return;
+  }
+  for (const r of results) {
+    const div = document.createElement('div');
+    div.className = 'item';
+    div.innerHTML = `
+      <img src="${r.poster || ''}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2260%22><rect fill=%22%23333%22 width=%2240%22 height=%2260%22/></svg>'">
+      <div class="info">
+        <div class="title">${esc(r.title)}</div>
+        <div class="meta">${r.year || ''} · ${r.imdb_id || ''}</div>
+        <div class="ov">${esc(r.overview || '')}</div>
+      </div>`;
+    div.onclick = () => { selectMovie(r); searchResults.style.display = 'none'; searchInput.value = ''; };
+    el.appendChild(div);
+  }
+  el.style.display = 'block';
+}
+
+// ========== MOVIE SELECTION & STREAMS ==========
+const video = document.getElementById('videoPlayer');
+let selectedStreamUrl = null;
+
+async function selectMovie(movie) {
+  currentMovie = movie;
+  document.getElementById('placeholder').style.display = 'none';
+  document.getElementById('videoContainer').style.display = 'flex';
+  document.getElementById('nowPlaying').style.display = 'flex';
+  document.getElementById('npTitle').textContent = movie.title + ' (' + (movie.year || '') + ')';
+  document.getElementById('npStatus').textContent = 'loading sources...';
+
+  // Fetch streams
+  const sourcesEl = document.getElementById('sourcesList');
+  sourcesEl.innerHTML = '<span style="color:#555;font-size:0.85rem">Searching Torrentio + TPB+ (max 8s)...</span>';
+  document.getElementById('streamSelector').style.display = 'block';
+
+  try {
+    const resp = await fetch(`/api/streams/${movie.imdb_id}`);
+    // Add client-side timeout fallback
+    const timeout = setTimeout(() => {
+      if (!resp.ok) {
+        sourcesEl.innerHTML = '<span style="color:#e85d3a;font-size:0.85rem">Request timed out — sources might be slow</span>';
+      }
+    }, 15000);
+    const data = await resp.json();
+    clearTimeout(timeout);
+    const streams = data.streams || [];
+    sourcesEl.innerHTML = '';
+
+    if (streams.length === 0) {
+      sourcesEl.innerHTML = '<span style="color:#888;font-size:0.85rem">No sources found for this title</span>';
+      document.getElementById('npStatus').textContent = 'no sources';
+      return;
+    }
+
+    // Deduplicate by resolution, sort by quality
+    const seen = new Set();
+    const unique = [];
+    for (const s of streams) {
+      const name = s.name || s.title || 'Unknown';
+      if (seen.has(name)) continue;
+      seen.add(name);
+      unique.push(s);
+    }
+
+    // Sort: 4K > 1080p > 720p > 480p
+    const qualityOrder = { '4K': 0, '1080': 1, '1080p': 1, '720': 2, '720p': 2, '480': 3, '480p': 3, '360': 4 };
+    unique.sort((a, b) => {
+      const aQ = Object.keys(qualityOrder).find(k => (a.name || '').includes(k));
+      const bQ = Object.keys(qualityOrder).find(k => (b.name || '').includes(k));
+      return (aQ ? qualityOrder[aQ] : 5) - (bQ ? qualityOrder[bQ] : 5);
+    });
+
+    for (const s of unique) {
+      const btn = document.createElement('button');
+      // Clean up name - strip newlines, emojis for display
+      const cleanName = (s.name || s.title || 'Unknown').replace(/\n/g, ' · ').replace(/[🔄🟡🟢🟣🔴🔵🟠🟤⚫⚪✅❌⭐✨🌟💾🔗🧲]/g, '').trim();
+      const label = cleanName + (s.size ? ` (${fmtSize(s.size)})` : '');
+      btn.textContent = label;
+      // Build magnet link from infoHash
+      const infoHash = s.infoHash || '';
+      const magnetUrl = infoHash ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(currentMovie?.title || 'video')}` : (s.url || s.guid || '');
+      btn.onclick = () => loadStream(magnetUrl, s);
+      sourcesEl.appendChild(btn);
+    }
+
+    // Auto-select best stream
+    if (unique.length > 0) {
+      const best = unique[0];
+      const infoHash = best.infoHash || '';
+      const magnetUrl = infoHash ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(currentMovie?.title || 'video')}` : (best.url || best.guid || '');
+      loadStream(magnetUrl, best);
+    }
+  } catch(e) {
+    sourcesEl.innerHTML = `<span style="color:#e85d3a;font-size:0.85rem">Error: ${e.message}</span>`;
+  }
+}
+
+function fmtSize(bytes) {
+  if (!bytes) return '';
+  const gb = bytes / 1024 / 1024 / 1024;
+  if (gb > 1) return gb.toFixed(1) + ' GB';
+  const mb = bytes / 1024 / 1024;
+  return mb.toFixed(0) + ' MB';
+}
+
+// ========== SERVER-SIDE TORRENT STREAMING ==========
+// No more in-browser WebTorrent — server downloads torrents and streams via HTTP
+
+let currentStreamUrl = null;
+
+function loadStream(url, streamInfo) {
+  if (!url) {
+    showToast('No stream URL available');
+    return;
+  }
+
+  // Extract infoHash from magnet or use directly
+  const infoHash = streamInfo.infoHash || (url.match(/btih:([a-zA-Z0-9]+)/i)?.[1]) || '';
+  const magnetUrl = infoHash
+    ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(currentMovie?.title || 'video')}`
+    : url;
+
+  document.getElementById('loadingStream').style.display = 'block';
+  document.getElementById('loadingText').textContent = 'Loading via server stream...';
+  document.getElementById('npStatus').textContent = '';
+  playBtn.textContent = '⏳';
+
+  // Highlight selected source
+  document.querySelectorAll('#sourcesList button').forEach(b => b.classList.remove('active'));
+  const btns = document.querySelectorAll('#sourcesList button');
+  const streamLabel = (streamInfo.name || streamInfo.title || '').replace(/\n/g, ' · ').trim();
+  for (let i = 0; i < btns.length; i++) {
+    if (btns[i].textContent.includes(streamLabel.substring(0, 20))) {
+      btns[i].classList.add('active');
+      break;
+    }
+  }
+
+  // Build the server stream URL
+  const streamUrl = infoHash
+    ? `/api/stream/torrent?infoHash=${infoHash}`
+    : `/api/stream/torrent?magnet=${encodeURIComponent(magnetUrl)}`;
+
+  currentStreamUrl = streamUrl;
+
+  // Set video source — the server handles the P2P and streams via HTTP
+  video.src = streamUrl;
+  video.load();
+
+  // Show progress as the server buffers
+  video.onwaiting = () => {
+    document.getElementById('npStatus').textContent = 'server buffering...';
+  };
+  video.oncanplay = () => {
+    document.getElementById('loadingStream').style.display = 'none';
+    document.getElementById('npStatus').textContent = 'streaming';
+    document.getElementById('loadingText').textContent = 'Loading stream...';
+    playBtn.textContent = '⏸';
+    video.play().catch(() => {});
+    isPlaying = true;
+    playerReady = true;
+    updatePlayBtn();
+    showToast('Stream ready — server is downloading');
+  };
+  video.onerror = () => {
+    document.getElementById('loadingStream').style.display = 'none';
+    document.getElementById('npStatus').textContent = 'error';
+    playBtn.textContent = '▶';
+    showToast('Server stream error — pick another source');
+  };
+  video.onstalled = () => {
+    document.getElementById('npStatus').textContent = 'stalled';
+  };
+}
+
+// Cleanup on source switch
+function stopStream() {
+  if (video) {
+    video.pause();
+    video.src = '';
+    video.load();
+  }
+  currentStreamUrl = null;
+}
+
+// ========== PLAYER CONTROLS ==========
+function togglePlay() {
+  if (!playerReady) return;
+  if (video.paused) {
+    video.play();
+    isPlaying = true;
+    sendWS({ type: 'play', time: video.currentTime });
+  } else {
+    video.pause();
+    isPlaying = false;
+    sendWS({ type: 'pause', time: video.currentTime });
+  }
+  updatePlayBtn();
+}
+
+function updatePlayBtn() {
+  document.getElementById('playBtn').innerHTML = isPlaying ? '&#9646;&#9646;' : '&#9654;';
+}
+
+function onSeekDrag() {
+  seeking = true;
+  const val = parseFloat(document.getElementById('seekBar').value);
+  const time = (val / 100) * duration;
+  document.getElementById('timeDisplay').textContent = fmtTime(time) + ' / ' + fmtTime(duration);
+}
+
+function onSeekEnd() {
+  seeking = false;
+  const val = parseFloat(document.getElementById('seekBar').value);
+  const time = (val / 100) * duration;
+  video.currentTime = time;
+  if (!isRemoteAction) {
+    sendWS({ type: 'seek', time: time });
+  }
+}
+
+// Video events
+video.addEventListener('timeupdate', () => {
+  if (!seeking && duration) {
+    const pct = (video.currentTime / duration) * 100;
+    document.getElementById('seekBar').value = pct;
+    document.getElementById('timeDisplay').textContent =
+      fmtTime(video.currentTime) + ' / ' + fmtTime(duration);
+  }
+  // Periodic sync check (every 5s)
+  currentTime = video.currentTime;
+  if (Date.now() - lastSyncTime > 5000 && isPlaying && !seeking) {
+    lastSyncTime = Date.now();
+  }
+});
+
+video.addEventListener('loadedmetadata', () => {
+  duration = video.duration || 0;
+  document.getElementById('seekBar').max = '100';
+});
+
+video.addEventListener('play', () => {
+  if (!isRemoteAction && playerReady) {
+    isPlaying = true;
+    updatePlayBtn();
+    sendWS({ type: 'play', time: video.currentTime });
+  }
+});
+
+video.addEventListener('pause', () => {
+  if (!isRemoteAction && playerReady) {
+    isPlaying = false;
+    updatePlayBtn();
+    sendWS({ type: 'pause', time: video.currentTime });
+  }
+});
+
+video.addEventListener('seeked', () => {
+  if (!isRemoteAction && playerReady) {
+    sendWS({ type: 'seek', time: video.currentTime });
+  }
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+});
+
+// ========== UTILITIES ==========
+function esc(s) {
+  const div = document.createElement('div');
+  div.textContent = s || '';
+  return div.innerHTML;
+}
+
+function fmtTime(secs) {
+  if (!secs || !isFinite(secs)) return '0:00';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  if (h > 0) return `${h}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+  return `${m}:${s.toString().padStart(2,'0')}`;
+}
+
+function fmtTimestamp(ts) {
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+// Enter key on login
+document.getElementById('nameInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') login();
+});
+document.getElementById('roomInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') login();
+});
+</script>
+</body>
+</html>
