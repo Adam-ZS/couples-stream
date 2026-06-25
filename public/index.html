@@ -893,7 +893,7 @@ async function selectMovie(movie) {
     const seen = new Set();
     const unique = [];
     for (const s of streams) {
-      const name = s.name || s.title || 'Unknown';
+      const name = s.name || s.title || s.description || 'Unknown';
       if (seen.has(name)) continue;
       seen.add(name);
       unique.push(s);
@@ -901,27 +901,34 @@ async function selectMovie(movie) {
 
     const qualityOrder = {'4K':0,'1080p':1,'1080':1,'720p':2,'720':2,'480p':3,'480':3,'360':4};
     unique.sort((a,b) => {
-      const aQ = Object.keys(qualityOrder).find(k => (a.name||'').includes(k));
-      const bQ = Object.keys(qualityOrder).find(k => (b.name||'').includes(k));
+      const aName = a.name || a.title || a.description || '';
+      const bName = b.name || b.title || b.description || '';
+      const aQ = Object.keys(qualityOrder).find(k => aName.includes(k));
+      const bQ = Object.keys(qualityOrder).find(k => bName.includes(k));
       return (aQ ? qualityOrder[aQ] : 5) - (bQ ? qualityOrder[bQ] : 5);
     });
 
     for (const s of unique) {
       const btn = document.createElement('button');
-      const cleanName = (s.name || s.title || 'Unknown').replace(/\n/g, ' · ').replace(/[🔄🟡🟢🟣🔴🔵🟠🟤⚫⚪✅❌⭐✨🌟💾🔗🧲]/g, '').trim();
-      const label = cleanName + (s.size ? ` (${fmtSize(s.size)})` : '');
-      btn.textContent = label;
+      const rawName = s.name || s.title || s.description || 'Unknown';
+      const cleanName = rawName.replace(/\n/g, ' · ').replace(/[🔄🟡🟢🟣🔴🔵🟠🟤⚫⚪✅❌⭐✨🌟💾🔗🧲]/g, '').trim();
+      const label = cleanName.length > 120 ? cleanName.substring(0, 120) + '…' : cleanName;
+      btn.textContent = label + (s.size ? ` (${fmtSize(s.size)})` : '');
       const infoHash = s.infoHash || '';
-      const magnetUrl = infoHash ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(currentMovie?.title || 'video')}` : (s.url || s.guid || '');
-      btn.onclick = () => loadStream(magnetUrl, s);
+      // For direct URL streams (webstream source), use the url directly
+      const streamUrl = s.url && !s.infoHash ? s.url : (infoHash ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(currentMovie?.title || 'video')}` : (s.url || s.guid || ''));
+      btn.onclick = () => loadStream(streamUrl, s);
       sourcesEl.appendChild(btn);
     }
 
+    // Auto-select best stream — prefer direct URL streams over torrent
     if (unique.length > 0) {
-      const best = unique[0];
+      // Direct URL streams (no torrent) are faster to start
+      const direct = unique.find(s => s.url && !s.infoHash);
+      const best = direct || unique[0];
       const infoHash = best.infoHash || '';
-      const magnetUrl = infoHash ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(currentMovie?.title || 'video')}` : (best.url || best.guid || '');
-      loadStream(magnetUrl, best);
+      const streamUrl = best.url && !best.infoHash ? best.url : (infoHash ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(currentMovie?.title || 'video')}` : (best.url || best.guid || ''));
+      loadStream(streamUrl, best);
     }
   } catch(e) {
     sourcesEl.innerHTML = `<span style="color:#e85d3a;font-size:0.85rem">Error: ${e.message}</span>`;
@@ -937,27 +944,60 @@ function fmtSize(bytes) {
 }
 
 // ========== STREAMING ==========
-let currentStreamUrl = null;
-
 function loadStream(url, streamInfo) {
-  if (!url) { showToast('No stream URL available'); return; }
-  const infoHash = streamInfo.infoHash || (url.match(/btih:([a-zA-Z0-9]+)/i)?.[1]) || '';
-  const magnetUrl = infoHash ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(currentMovie?.title || 'video')}` : url;
+  if (!url && !streamInfo.infoHash && !streamInfo.url) {
+    showToast('No stream URL available'); return;
+  }
+
+  // Determine if this is a direct URL stream (no torrent needed)
+  const isDirectUrl = streamInfo.url && !streamInfo.infoHash;
 
   document.getElementById('loadingStream').style.display = 'block';
-  document.getElementById('loadingText').textContent = 'Starting server stream...';
   document.getElementById('npStatus').textContent = '';
-  document.getElementById('playBtn').innerHTML = '⏳';
 
   document.querySelectorAll('#sourcesList button').forEach(b => b.classList.remove('active'));
   const btns = document.querySelectorAll('#sourcesList button');
-  const streamLabel = (streamInfo.name || streamInfo.title || '').replace(/\n/g, ' · ').trim();
+  const streamLabel = (streamInfo.name || streamInfo.title || streamInfo.description || '').replace(/\n/g, ' · ').trim();
   for (let i = 0; i < btns.length; i++) {
     if (btns[i].textContent.includes(streamLabel.substring(0, 20))) {
-      btns[i].classList.add('active');
-      break;
+      btns[i].classList.add('active'); break;
     }
   }
+
+  if (isDirectUrl) {
+    // Direct HTTP stream — play straight from the URL
+    const directUrl = streamInfo.url;
+    document.getElementById('loadingText').textContent = 'Loading stream...';
+    document.getElementById('playBtn').innerHTML = '⏳';
+    video.src = directUrl;
+    video.load();
+    video.oncanplay = () => {
+      document.getElementById('loadingStream').style.display = 'none';
+      document.getElementById('npStatus').textContent = 'streaming';
+      document.getElementById('playBtn').innerHTML = '⏸';
+      video.play().catch(() => {});
+      isPlaying = true; playerReady = true;
+      updatePlayBtn();
+      showToast('Stream ready');
+    };
+    video.onerror = () => {
+      document.getElementById('loadingStream').style.display = 'none';
+      document.getElementById('npStatus').textContent = 'error';
+      document.getElementById('playBtn').innerHTML = '▶';
+      showToast('Stream error — try another source');
+    };
+    currentStreamUrl = directUrl;
+    return;
+  }
+
+  // Torrent-based stream (infoHash)
+  const infoHash = streamInfo.infoHash || (url.match(/btih:([a-zA-Z0-9]+)/i)?.[1]) || '';
+  const magnetUrl = infoHash
+    ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(currentMovie?.title || 'video')}`
+    : url;
+
+  document.getElementById('loadingText').textContent = 'Starting torrent stream...';
+  document.getElementById('playBtn').innerHTML = '⏳';
 
   const streamUrl = infoHash ? `/api/stream/torrent?infoHash=${infoHash}` : `/api/stream/torrent?magnet=${encodeURIComponent(magnetUrl)}`;
   currentStreamUrl = streamUrl;
@@ -970,8 +1010,7 @@ function loadStream(url, streamInfo) {
     document.getElementById('npStatus').textContent = 'streaming';
     document.getElementById('playBtn').innerHTML = '⏸';
     video.play().catch(() => {});
-    isPlaying = true;
-    playerReady = true;
+    isPlaying = true; playerReady = true;
     updatePlayBtn();
     showToast('Stream ready');
   };
@@ -983,6 +1022,8 @@ function loadStream(url, streamInfo) {
   };
   video.onstalled = () => { document.getElementById('npStatus').textContent = 'stalled'; };
 }
+
+let currentStreamUrl = null;
 
 function stopStream() {
   if (video) { video.pause(); video.src = ''; video.load(); }

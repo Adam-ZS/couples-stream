@@ -5,8 +5,6 @@ const path = require('path');
 
 const PORT = process.env.PORT || 8765;
 const TMDB_KEY = '8265bd1679663a7ea12ac168da84d2e8';
-const TORRENTIO_BASE = 'https://torrentio.strem.fun';
-const TPB_BASE = 'https://thepiratebay-plus.strem.fun';
 
 // ---- Stream sources ----
 const app = express();
@@ -48,8 +46,15 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
-// Stream sources: Torrentio + ThePirateBay+
+// Stream sources
 const FETCH_TIMEOUT = 15000; // 15s max per source
+const STREAM_SOURCES = [
+  { name: 'torrentio', url: id => `https://torrentio.strem.fun/stream/movie/${id}.json` },
+  { name: 'tpb',       url: id => `https://thepiratebay-plus.strem.fun/stream/movie/${id}.json` },
+  { name: 'filtorrent', url: id => `https://ce8c71dcef3b-filtorrent.baby-beamup.club/stream/movie/${id}.json` },
+  { name: 'webstream',  url: id => `https://87d6a6ef6b58-webstreamrmbg.baby-beamup.club/stream/movie/${id}.json` },
+  { name: 'comet',      url: id => `https://comet.feels.legal/stream/movie/${id}.json` },
+];
 
 async function fetchWithTimeout(url, timeoutMs = FETCH_TIMEOUT) {
   const ctrl = new AbortController();
@@ -68,19 +73,22 @@ async function fetchWithTimeout(url, timeoutMs = FETCH_TIMEOUT) {
 app.get('/api/streams/:imdbId', async (req, res) => {
   try {
     const { imdbId } = req.params;
-    // Fetch from all sources in parallel with individual timeouts
-    const [torrentioResp, tpbResp] = await Promise.allSettled([
-      fetchWithTimeout(`${TORRENTIO_BASE}/stream/movie/${imdbId}.json`).catch(e => { console.log(`Torrentio: ${e.message}`); return null; }),
-      fetchWithTimeout(`${TPB_BASE}/stream/movie/${imdbId}.json`).catch(e => { console.log(`TPB: ${e.message}`); return null; })
-    ]);
+    // Fetch from ALL sources in parallel
+    const results = await Promise.allSettled(
+      STREAM_SOURCES.map(src =>
+        fetchWithTimeout(src.url(imdbId))
+          .catch(e => { console.log(`[${src.name}] ${e.message}`); return null; })
+      )
+    );
     const combined = { streams: [] };
-    if (torrentioResp.status === 'fulfilled' && torrentioResp.value?.streams) {
-      combined.streams.push(...torrentioResp.value.streams.map(s => ({ ...s, source: 'torrentio' })));
-    }
-    if (tpbResp.status === 'fulfilled' && tpbResp.value?.streams) {
-      combined.streams.push(...tpbResp.value.streams.map(s => ({ ...s, source: 'tpb' })));
-    }
-    // Deduplicate by infoHash
+    results.forEach((result, i) => {
+      if (result.status === 'fulfilled' && result.value?.streams) {
+        combined.streams.push(
+          ...result.value.streams.map(s => ({ ...s, source: STREAM_SOURCES[i].name }))
+        );
+      }
+    });
+    // Deduplicate by infoHash or url
     const seen = new Set();
     combined.streams = combined.streams.filter(s => {
       const key = s.infoHash || s.url || s.name;
