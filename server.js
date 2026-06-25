@@ -356,30 +356,38 @@ app.get('/api/proxy', async (req, res) => {
   if (!url) return res.status(400).send('Need ?url=');
 
   try {
-    const resp = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'Referer': 'https://couples-stream.onrender.com/',
-        'Accept': 'video/*,*/*'
-      }
-    });
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      'Referer': 'https://couples-stream.onrender.com/',
+      'Accept': 'video/*,*/*'
+    };
 
-    if (!resp.ok) {
+    // Forward range header for seeking support
+    const range = req.headers.range;
+    if (range) headers['Range'] = range;
+
+    const resp = await fetch(url, { headers });
+
+    if (!resp.ok && resp.status !== 206) {
       return res.status(resp.status).send('Upstream error');
     }
 
-    // Forward content headers
     const contentType = resp.headers.get('content-type') || 'video/mp4';
     const contentLength = resp.headers.get('content-length');
+    const contentRange = resp.headers.get('content-range');
 
-    res.writeHead(200, {
+    const responseHeaders = {
       'Content-Type': contentType,
-      'Content-Length': contentLength || '',
       'Accept-Ranges': 'bytes',
       'Access-Control-Allow-Origin': '*'
-    });
+    };
 
-    // Stream the response body
+    if (contentLength) responseHeaders['Content-Length'] = contentLength;
+    if (contentRange) responseHeaders['Content-Range'] = contentRange;
+
+    const statusCode = resp.status === 206 ? 206 : 200;
+    res.writeHead(statusCode, responseHeaders);
+
     for await (const chunk of resp.body) {
       res.write(chunk);
     }
