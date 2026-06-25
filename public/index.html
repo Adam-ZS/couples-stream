@@ -453,6 +453,13 @@
   ::-webkit-scrollbar-track{background:transparent;}
   ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
   ::-webkit-scrollbar-thumb:hover{background:var(--text3);}
+  .sync-tab-btn{background:none;border:1px solid var(--border);color:var(--accent);cursor:pointer;padding:2px 8px;border-radius:6px;font-size:.8rem;margin-left:auto}
+  .sync-tab-btn:hover{background:var(--surface2)}
+  .sync-overlay{position:absolute;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.75);cursor:pointer}
+  .sync-overlay-content{text-align:center;color:#fff}
+  .sync-overlay-icon{font-size:3rem;margin-bottom:8px}
+  .sync-overlay-text{font-size:1rem;opacity:.9}
+  .sync-overlay-countdown{font-size:4rem;font-weight:700;margin-top:8px;color:var(--accent)}
 </style>
 </head>
 <body>
@@ -539,6 +546,16 @@
         <iframe id="embedPlayer" allowfullscreen allow="autoplay; fullscreen" sandbox="allow-same-origin allow-scripts allow-forms allow-popups"></iframe>
         <video id="videoPlayer" crossorigin="anonymous" style="display:none"></video>
         <div id="externalFallback" style="display:none;align-items:center;justify-content:center;flex:1;background:#0e0e10"></div>
+
+        <!-- Sync overlay for embed players -->
+        <div id="syncOverlay" class="sync-overlay" style="display:none" onclick="startSyncCountdown()">
+          <div class="sync-overlay-content">
+            <div id="syncOverlayIcon" class="sync-overlay-icon">⏱</div>
+            <div id="syncOverlayText" class="sync-overlay-text">Tap to sync with partner</div>
+            <div id="syncOverlayCountdown" class="sync-overlay-countdown"></div>
+          </div>
+        </div>
+
         <div class="controls" id="controls">
           <button id="playBtn" onclick="togglePlay()">▶</button>
           <div class="time-bar">
@@ -555,6 +572,7 @@
         <button data-source="torrent" onclick="switchSource('torrent')">📡 Sync Player</button>
         <button data-source="moviezonee" onclick="switchSource('moviezonee')">🌍 MovieZonee</button>
         <button data-source="flixmomo" onclick="switchSource('flixmomo')">🌍 Flixmomo</button>
+        <button class="sync-tab-btn" onclick="showSyncOverlay()">⏱</button>
       </div>
 
       <div class="stream-selector" id="streamSelector">
@@ -792,6 +810,21 @@ function handleMessage(msg) {
       // Relay from embed video player via postMessage
       if (msg.name !== userName && msg.action) {
         console.log('[embed_sync]', msg.action, msg.time);
+      }
+      break;
+    case 'sync_overlay':
+      // Partner triggered sync overlay
+      if (msg.name !== userName) {
+        const overlay = document.getElementById('syncOverlay');
+        if (!overlay) break;
+        if (msg.action === 'show') {
+          overlay.style.display = 'flex';
+          document.getElementById('syncOverlayIcon').textContent = '⏱';
+          document.getElementById('syncOverlayText').textContent = msg.name + ' wants to sync — tap to join';
+          document.getElementById('syncOverlayCountdown').textContent = '';
+        } else if (msg.action === 'countdown') {
+          runSyncCountdown();
+        }
       }
       break;
     case 'select_movie':
@@ -1373,6 +1406,47 @@ function syncCountdown() {
     sendWS({ type: 'countdown', text: '▶ GO!' });
     showToast('▶ GO! Press play now!');
   }, 3000);
+}
+
+// Show sync overlay on the video player (embed mode)
+function showSyncOverlay() {
+  const overlay = document.getElementById('syncOverlay');
+  if (!overlay) { syncCountdown(); return; }
+  overlay.style.display = 'flex';
+  document.getElementById('syncOverlayIcon').textContent = '⏱';
+  document.getElementById('syncOverlayText').textContent = 'Tap to sync with partner';
+  document.getElementById('syncOverlayCountdown').textContent = '';
+  sendWS({ type: 'sync_overlay', action: 'show' });
+}
+
+// Show countdown on overlay (runs locally on BOTH sides)
+function runSyncCountdown() {
+  const overlay = document.getElementById('syncOverlay');
+  if (!overlay || overlay.style.display === 'none') return;
+  const icon = document.getElementById('syncOverlayIcon');
+  const text = document.getElementById('syncOverlayText');
+  const cd = document.getElementById('syncOverlayCountdown');
+  icon.textContent = '👀';
+  text.textContent = 'Sync incoming...';
+  let i = 3;
+  cd.textContent = i;
+  const iv = setInterval(() => {
+    i--;
+    if (i > 0) { cd.textContent = i; }
+    else {
+      clearInterval(iv);
+      cd.textContent = '▶';
+      text.textContent = 'GO! Press play!';
+      icon.textContent = '🎬';
+      setTimeout(() => { overlay.style.display = 'none'; }, 1500);
+    }
+  }, 1000);
+}
+
+// Start sync countdown — called when user taps overlay
+function startSyncCountdown() {
+  runSyncCountdown();
+  sendWS({ type: 'sync_overlay', action: 'countdown' });
 }
 
 function showRoomCreated() {
