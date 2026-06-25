@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js"></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   :root{
@@ -1020,16 +1021,17 @@ function switchSource(source) {
     document.getElementById('controls').classList.add('show');
     document.getElementById('streamSelector').style.display = 'block';
     document.getElementById('npStatus').textContent = 'loading...';
-    // Start fetching and auto-play first working stream
+    // Fetch torrent sources and let user pick
     fetchAndAutoPlaySync(currentMovie);
   } else if ((source === 'moviezonee' || source === 'flixmomo') && currentMovie) {
-    // Embed directly using their server sources, not full website
+    // Embed directly using their server sources
     embed.style.display = 'block';
     video.style.display = 'none';
-    document.getElementById('externalFallback').style.display = 'none';
-
-    const imdb = currentMovie.imdb_id;
+    document.getElementById('streamSelector').style.display = 'none';
+    document.getElementById('controls').classList.remove('show');
     const tmdbId = currentMovie.id;
+    const imdb = currentMovie.imdb_id;
+    const subsQ = arabicSubs ? '?subs=ar' : '';
     const subsQ = arabicSubs ? '?subs=ar' : '';
 
     if (source === 'moviezonee') {
@@ -1061,14 +1063,14 @@ function switchSource(source) {
   }
 }
 
-// Fetch streams and auto-play the best one for sync player
+// Fetch torrent streams and show in list — uses client-side WebTorrent
 async function fetchAndAutoPlaySync(movie) {
   const sourcesEl = document.getElementById('sourcesList');
   const loading = document.getElementById('loadingStream');
   const loadText = document.getElementById('loadingText');
-  sourcesEl.innerHTML = '<span style="color:#888;font-size:0.82rem">Loading sources...</span>';
+  sourcesEl.innerHTML = '<span style="color:#888;font-size:0.82rem">Loading torrent sources...</span>';
   loading.style.display = 'block';
-  loadText.textContent = 'Finding video sources...';
+  loadText.textContent = 'Finding sources...';
   document.getElementById('streamSelector').style.display = 'block';
 
   try {
@@ -1083,56 +1085,52 @@ async function fetchAndAutoPlaySync(movie) {
       return;
     }
 
-    // Separate direct URL streams (WebStreamrMBG) from torrent streams
-    const directStreams = streams.filter(s => s.url && !s.infoHash);
-    const torrentStreams = streams.filter(s => s.infoHash || (s.url && s.infoHash));
-
-    // Show available sources as clickable buttons
-    const allSources = [...directStreams, ...torrentStreams];
+    // Show first 25 unique torrent sources
     const seen = new Set();
-    let autoPlayed = false;
-
-    for (const s of allSources.slice(0, 25)) {
+    let count = 0;
+    for (const s of streams) {
+      if (!s.infoHash) continue;
       const name = s.name || s.title || s.description || '?';
       if (seen.has(name)) continue;
       seen.add(name);
+      if (count++ >= 25) break;
 
       const btn = document.createElement('button');
       const raw = s.name || s.title || s.description || 'Unknown';
       const clean = raw.replace(/\n/g, ' · ').replace(/[🔄🟡🟢🟣🔴🔵🟠🟤⚫⚪✅❌⭐✨🌟💾🔗🧲]/g, '').trim();
-      const isDirect = s.url && !s.infoHash;
-      btn.textContent = (isDirect ? '📺 ' : '🧲 ') + (clean.length > 80 ? clean.substring(0,80)+'…' : clean) + (s.size ? ` (${fmtSize(s.size)})` : '');
-      btn.onclick = () => { loadSyncStream(s); };
-      btn.title = isDirect ? 'Direct stream (works with sync)' : 'Torrent stream';
-      sourcesEl.appendChild(btn);
-
-      // Auto-play first direct URL stream (most reliable)
-      if (!autoPlayed && isDirect) {
+      btn.textContent = `${clean.substring(0,80)}` + (s.size ? ` (${fmtSize(s.size)})` : '');
+      btn.onclick = () => {
         loadSyncStream(s);
-        autoPlayed = true;
+        document.querySelectorAll('#sourcesList button').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-      }
+      };
+      btn.title = `Magnet: ${s.infoHash.substring(0,20)}...`;
+      sourcesEl.appendChild(btn);
     }
 
-    // If no direct streams, try first torrent
-    if (!autoPlayed && torrentStreams.length > 0) {
-      loadSyncStream(torrentStreams[0]);
-      sourcesEl.querySelector('button')?.classList.add('active');
-    }
-
-    if (!autoPlayed && allSources.length === 0) {
-      loading.style.display = 'none';
-      sourcesEl.innerHTML = '<span style="color:#888;font-size:0.82rem">No playable sources</span>';
+    if (count === 0) {
+      sourcesEl.innerHTML = '<span style="color:#888;font-size:0.82rem">No playable sources — try embedding instead</span>';
     }
   } catch(e) {
     sourcesEl.innerHTML = `<span style="color:#e85d3a;font-size:0.82rem">Error: ${e.message}</span>`;
-    loading.style.display = 'none';
   }
+  loading.style.display = 'none';
 }
 
-// Load a stream into the sync player (uses proxy for direct URLs, WebTorrent for infoHash)
+// Client-side WebTorrent engine — shared across sync sources
+let wtClient = null;
+
+function getWT() {
+  if (!wtClient) wtClient = new WebTorrent();
+  return wtClient;
+}
+
+// Load a stream using client-side WebTorrent (browser P2P, no server needed)
 function loadSyncStream(streamInfo) {
-  if (!streamInfo || (!streamInfo.infoHash && !streamInfo.url)) return;
+  if (!streamInfo || (!streamInfo.infoHash && !streamInfo.url)) {
+    showToast('Invalid stream source');
+    return;
+  }
 
   embed.style.display = 'none';
   video.style.display = 'block';
@@ -1141,100 +1139,68 @@ function loadSyncStream(streamInfo) {
   const loading = document.getElementById('loadingStream');
   const loadText = document.getElementById('loadingText');
   loading.style.display = 'block';
+  loadText.textContent = 'Connecting to torrent swarm...';
+  document.getElementById('npStatus').textContent = 'connecting...';
 
-  // Highlight active button
-  document.querySelectorAll('#sourcesList button').forEach(b => b.classList.remove('active'));
-  const label = (streamInfo.name || streamInfo.title || streamInfo.description || '').substring(0, 30);
-  document.querySelectorAll('#sourcesList button').forEach(b => {
-    if (b.textContent.includes(label)) b.classList.add('active');
+  // Clean up any previous torrent
+  const existing = wtClient?.torrents?.[0];
+  if (existing) existing.destroy();
+
+  // Build magnet URI
+  const infoHash = streamInfo.infoHash || '';
+  const trackers = '&tr=udp://tracker.opentrackr.org:1337&tr=http://tracker.opentrackr.org:1337/announce&tr=udp://open.demonii.com:1337/announce&tr=udp://tracker.leechers-paradise.org:6969&tr=udp://9.rarbg.to:2710&tr=wss://tracker.btorrent.xyz&tr=wss://tracker.openwebtorrent.com';
+  const magnet = `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent((streamInfo.title || streamInfo.name || 'video').substring(0,50))}${trackers}`;
+
+  const client = getWT();
+  const torrent = client.add(magnet, { announce: trackers.split('&tr=').slice(1) });
+
+  torrent.on('warning', (e) => { console.warn('WebTorrent warning:', e.message); });
+  torrent.on('error', (e) => {
+    loading.style.display = 'none';
+    document.getElementById('npStatus').textContent = 'torrent error';
+    showToast('Torrent error: ' + e.message);
   });
 
-  const isDirectUrl = streamInfo.url && !streamInfo.infoHash;
+  torrent.on('metadata', () => {
+    // Pick the largest video file
+    const files = torrent.files;
+    let best = null;
+    for (const f of files) {
+      if (f.name.match(/\.(mp4|mkv|webm|avi|mov)$/i)) {
+        if (!best || f.length > best.length) best = f;
+      }
+    }
+    if (!best && files.length > 0) best = files[0];
 
-  if (isDirectUrl) {
-    const isAlreadyProxied = streamInfo.url.startsWith('/api/proxy');
-    const srcUrl = isAlreadyProxied ? streamInfo.url : `/api/proxy?url=${encodeURIComponent(streamInfo.url)}`;
-
-    // Check if URL is HLS (m3u8) — may need hls.js
-    const isM3u8 = srcUrl.includes('.m3u8') || streamInfo.url.includes('.m3u8');
-
-    if (isM3u8 && Hls.isSupported()) {
-      // Use HLS.js for m3u8 playback
-      const hls = new Hls();
-      hls.loadSource(srcUrl);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+    if (best) {
+      loadText.textContent = `Downloading ${best.name.substring(0,40)}...`;
+      best.streamTo(video);
+      video.oncanplay = () => {
         loading.style.display = 'none';
         document.getElementById('npStatus').textContent = 'streaming';
         video.play().catch(() => {});
         isPlaying = true; playerReady = true;
         updatePlayBtn();
         sendWS({ type: 'play', time: 0 });
-        showToast('Stream ready — sync active');
-      });
-      hls.on(Hls.Events.ERROR, () => {
+        showToast('Sync active — torrent streaming');
+      };
+      video.onerror = () => {
         loading.style.display = 'none';
         document.getElementById('npStatus').textContent = 'error';
-        showToast('HLS stream failed, try another source');
-      });
+      };
     } else {
-      // Regular video stream
-      loadText.textContent = 'Loading stream...';
-      video.src = srcUrl;
-      video.load();
+      loading.style.display = 'none';
+      document.getElementById('npStatus').textContent = 'no video file';
+      showToast('No playable video file in torrent');
     }
+  });
 
-    video.oncanplay = () => {
-      if (!isM3u8 || !Hls.isSupported()) {
-        loading.style.display = 'none';
-        document.getElementById('npStatus').textContent = 'streaming';
-        if (document.getElementById('customUrlInput').style.display !== 'block') {
-          // Auto-play
-          video.play().catch(() => {});
-          isPlaying = true; playerReady = true;
-          updatePlayBtn();
-          sendWS({ type: 'play', time: 0 });
-          showToast('Sync active — controls synced');
-        }
-      }
-    };
-    video.onerror = () => {
-      if (isM3u8 && Hls.isSupported()) return; // HLS handles errors internally
-      loading.style.display = 'none';
-      document.getElementById('npStatus').textContent = 'error';
-      showToast('Stream failed, try another source');
-    };
-    video.onwaiting = () => { document.getElementById('npStatus').textContent = 'buffering...'; };
-    video.onstalled = () => { document.getElementById('npStatus').textContent = 'stalled'; };
-    video.onloadedmetadata = () => { duration = video.duration || 0; };
-  } else {
-    // Torrent stream — use WebTorrent
-    const infoHash = streamInfo.infoHash || '';
-    loadText.textContent = 'Starting torrent...';
-    const streamUrl = infoHash
-      ? `/api/stream/torrent?infoHash=${infoHash}`
-      : `/api/stream/torrent?magnet=${encodeURIComponent(streamInfo.url||'')}`;
-    video.src = streamUrl;
-    video.load();
-
-    video.oncanplay = () => {
-      loading.style.display = 'none';
-      document.getElementById('npStatus').textContent = 'torrent stream';
-      video.play().catch(() => {});
-      isPlaying = true; playerReady = true;
-      updatePlayBtn();
-      sendWS({ type: 'play', time: 0 });
-      showToast('Torrent stream ready');
-    };
-    video.onerror = () => {
-      loading.style.display = 'none';
-      document.getElementById('npStatus').textContent = 'error';
-      showToast('Torrent failed');
-    };
-    video.onwaiting = () => { document.getElementById('npStatus').textContent = 'torrent buffering...'; };
-    video.onstalled = () => { document.getElementById('npStatus').textContent = 'torrent stalled'; };
-    video.onloadedmetadata = () => { duration = video.duration || 0; };
-  }
+  // Progress
+  torrent.on('download', () => {
+    const pct = (torrent.progress * 100).toFixed(0);
+    loadText.textContent = `Downloading — ${pct}% (${fmtSize(torrent.downloaded)}/${fmtSize(torrent.length || torrent.downloaded)})`;
+    document.getElementById('npStatus').textContent = `torrent ${pct}%`;
+  });
 }
 
 // Old functions kept for compatibility if called elsewhere
