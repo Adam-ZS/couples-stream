@@ -352,13 +352,13 @@ function streamFileToResponse(file, req, res) {
 
 // ---- Proxy for direct URL streams (bypass CORS/referrer issues) ----
 app.get('/api/proxy', async (req, res) => {
-  const { url } = req.query;
+  const { url, ref } = req.query;
   if (!url) return res.status(400).send('Need ?url=');
 
   try {
     const headers = {
       'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-      'Referer': 'https://couples-stream.onrender.com/',
+      'Referer': ref || 'https://couples-stream.onrender.com/',
       'Accept': 'video/*,*/*'
     };
 

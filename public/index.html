@@ -555,8 +555,17 @@
       </div>
 
       <div class="stream-selector" id="streamSelector">
-        <div class="title">Torrent Sources</div>
+        <div class="title">Sync Sources<button onclick="showCustomUrlInput()" style="float:right;background:var(--surface2);border:1px solid var(--border);color:var(--text2);font-size:0.7rem;padding:2px 8px;border-radius:4px;cursor:pointer">+ Paste URL</button></div>
         <div class="sources" id="sourcesList"></div>
+        <div id="customUrlInput" style="display:none;padding:8px 14px 10px;border-top:1px solid var(--border)">
+          <div style="display:flex;gap:6px;margin-bottom:6px">
+            <input id="customUrlField" type="text" placeholder="Paste .m3u8 or .mp4 URL..." style="flex:1;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.82rem;outline:none" onkeydown="if(event.key==='Enter')loadCustomUrl()">
+          </div>
+          <div style="display:flex;gap:6px">
+            <input id="customRefField" type="text" placeholder="Referrer (optional — the page URL it came from)" style="flex:1;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:0.78rem;outline:none" onkeydown="if(event.key==='Enter')loadCustomUrl()">
+            <button onclick="loadCustomUrl()" style="padding:7px 14px;background:var(--accent);border:none;border-radius:6px;color:#fff;font-size:0.78rem;cursor:pointer">Load</button>
+          </div>
+        </div>
       </div>
       <div class="loading-stream" id="loadingStream">
         <span id="loadingText">Loading...</span>
@@ -801,6 +810,15 @@ function handleMessage(msg) {
       break;
     case 'countdown':
       showToast('🎬 ' + msg.name + ' said: ' + msg.text);
+      break;
+    case 'custom_url':
+      // Partner shared a custom video URL — load it in sync player
+      if (msg.name !== userName && msg.url) {
+        showToast(msg.name + ' shared a video URL');
+        document.querySelector('.player-tabs button[data-source="torrent"]')?.click();
+        const streamInfo = { url: msg.url, name: 'Custom URL', infoHash: null, _isProxied: true };
+        loadSyncStream(streamInfo);
+      }
       break;
   }
 }
@@ -1116,9 +1134,9 @@ function loadSyncStream(streamInfo) {
   const isDirectUrl = streamInfo.url && !streamInfo.infoHash;
 
   if (isDirectUrl) {
-    // Direct URL stream — play through proxy with sync
+    const isAlreadyProxied = streamInfo.url.startsWith('/api/proxy');
     loadText.textContent = 'Loading stream...';
-    video.src = `/api/proxy?url=${encodeURIComponent(streamInfo.url)}`;
+    video.src = isAlreadyProxied ? streamInfo.url : `/api/proxy?url=${encodeURIComponent(streamInfo.url)}`;
     video.load();
 
     video.oncanplay = () => {
@@ -1196,6 +1214,34 @@ function togglePlay() {
 
 function updatePlayBtn() {
   document.getElementById('playBtn').innerHTML = isPlaying ? '⏸' : '▶';
+}
+
+// Custom URL input for sync player
+function showCustomUrlInput() {
+  document.getElementById('customUrlInput').style.display = 'block';
+  document.getElementById('customUrlField').focus();
+}
+
+function loadCustomUrl() {
+  const url = document.getElementById('customUrlField').value.trim();
+  const ref = document.getElementById('customRefField').value.trim();
+  if (!url) { showToast('Paste a video URL first'); return; }
+  document.getElementById('customUrlInput').style.display = 'none';
+  document.getElementById('customUrlField').value = '';
+  document.getElementById('customRefField').value = '';
+
+  const proxyUrl = ref ? `/api/proxy?url=${encodeURIComponent(url)}&ref=${encodeURIComponent(ref)}` : `/api/proxy?url=${encodeURIComponent(url)}`;
+
+  // Switch to sync source tab
+  document.querySelector('.player-tabs button[data-source="torrent"]')?.click();
+
+  // Load in sync player
+  const streamInfo = { url: proxyUrl, name: 'Custom URL', infoHash: null, _isProxied: true };
+  loadSyncStream(streamInfo);
+
+  // Broadcast to room
+  sendWS({ type: 'custom_url', url: proxyUrl, ref: ref, name: 'Custom URL' });
+  showToast('Custom URL loaded & broadcast to room');
 }
 
 function onSeekDrag() {
