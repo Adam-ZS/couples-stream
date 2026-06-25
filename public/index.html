@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>couples.stream</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   :root{
@@ -783,7 +785,15 @@ function handleMessage(msg) {
         if (msg.source === 'embed') {
           embed.style.display = 'block'; video.style.display = 'none';
           document.getElementById('externalFallback').style.display = 'none';
-          embed.src = msg.embedUrl || `https://embed.su/embed/movie/${msg.movie.imdb_id}`;
+          // Use same embed sources as loadEmbed
+          const tmdb = msg.movie.id;
+          const imdb = msg.movie.imdb_id;
+          const subs = arabicSubs ? '?subs=ar' : '';
+          embed.src = `https://vidsrc.to/embed/movie/${tmdb}${subs}`;
+          embed.onerror = () => {
+            // Try next source
+            embed.src = `https://vidsrc.me/embed/movie?tmdb=${tmdb}${subs}`;
+          };
           document.getElementById('npStatus').textContent = 'embed player';
         } else if (msg.source === 'torrent') {
           switchSource('torrent');
@@ -942,27 +952,35 @@ async function selectMovie(movie) {
 
 function loadEmbed(movie) {
   const imdb = movie.imdb_id;
+  const tmdbId = movie.id;
   const subsParam = arabicSubs ? '?subs=ar' : '';
 
-  // Try multiple embed sources in order
+  // Try multiple embed sources — embed.su is dead, use vidsrc providers first
   const embeds = [
-    `https://embed.su/embed/movie/${imdb}${arabicSubs ? '?subs=ar' : ''}`,
-    `https://vidsrc.to/embed/movie/${imdb}${arabicSubs ? '?subs=ar' : ''}`,
-    `https://2embed.cc/embed/${imdb}${arabicSubs ? '?subs=ar' : ''}`
+    `https://vidsrc.to/embed/movie/${tmdbId}${subsParam}`,
+    `https://vidsrc.me/embed/movie?tmdb=${tmdbId}${subsParam}`,
+    `https://vidsrc.cc/v2/embed/movie/${tmdbId}${subsParam}`,
+    `https://multiembed.mov/directstream.php?video_id=${imdb}&tmdb=1`
   ];
 
-  embed.src = embeds[0];
-  document.getElementById('npStatus').textContent = 'embed player';
-
-  // Fallback if first fails after timeout
   let tried = 0;
-  embed.onerror = () => {
-    tried++;
+  embed.style.display = 'block';
+  video.style.display = 'none';
+
+  function tryNext() {
     if (tried < embeds.length) {
       embed.src = embeds[tried];
-      showToast('Trying alternate source...');
+      document.getElementById('npStatus').textContent = `embed source ${tried+1}`;
+      tried++;
+    } else {
+      embed.style.display = 'none';
+      document.getElementById('npStatus').textContent = 'all embeds failed';
+      showToast('All embed sources failed. Try Sync Player.');
     }
-  };
+  }
+
+  embed.onerror = tryNext;
+  tryNext();
 }
 
 function onEmbedFail() {
@@ -1135,21 +1153,50 @@ function loadSyncStream(streamInfo) {
 
   if (isDirectUrl) {
     const isAlreadyProxied = streamInfo.url.startsWith('/api/proxy');
-    loadText.textContent = 'Loading stream...';
-    video.src = isAlreadyProxied ? streamInfo.url : `/api/proxy?url=${encodeURIComponent(streamInfo.url)}`;
-    video.load();
+    const srcUrl = isAlreadyProxied ? streamInfo.url : `/api/proxy?url=${encodeURIComponent(streamInfo.url)}`;
+
+    // Check if URL is HLS (m3u8) — may need hls.js
+    const isM3u8 = srcUrl.includes('.m3u8') || streamInfo.url.includes('.m3u8');
+
+    if (isM3u8 && Hls.isSupported()) {
+      // Use HLS.js for m3u8 playback
+      const hls = new Hls();
+      hls.loadSource(srcUrl);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        loading.style.display = 'none';
+        document.getElementById('npStatus').textContent = 'streaming';
+        video.play().catch(() => {});
+        isPlaying = true; playerReady = true;
+        updatePlayBtn();
+        sendWS({ type: 'play', time: 0 });
+        showToast('Stream ready — sync active');
+      });
+      hls.on(Hls.Events.ERROR, () => {
+        loading.style.display = 'none';
+        document.getElementById('npStatus').textContent = 'error';
+        showToast('HLS stream failed, try another source');
+      });
+    } else {
+      // Regular video stream
+      loadText.textContent = 'Loading stream...';
+      video.src = srcUrl;
+      video.load();
+    }
 
     video.oncanplay = () => {
-      loading.style.display = 'none';
-      document.getElementById('npStatus').textContent = 'streaming';
-      video.play().catch(() => {});
-      isPlaying = true; playerReady = true;
-      updatePlayBtn();
-      // Broadcast play to room
-      sendWS({ type: 'play', time: 0 });
-      showToast('Stream ready — sync active');
+      if (!isM3u8 || !Hls.isSupported()) {
+        loading.style.display = 'none';
+        document.getElementById('npStatus').textContent = 'streaming';
+        video.play().catch(() => {});
+        isPlaying = true; playerReady = true;
+        updatePlayBtn();
+        sendWS({ type: 'play', time: 0 });
+        showToast('Stream ready — sync active');
+      }
     };
     video.onerror = () => {
+      if (isM3u8 && Hls.isSupported()) return; // HLS handles errors internally
       loading.style.display = 'none';
       document.getElementById('npStatus').textContent = 'error';
       showToast('Stream failed, try another source');
