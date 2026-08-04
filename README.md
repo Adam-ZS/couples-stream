@@ -20,9 +20,28 @@ The original project mixed watch-party features with exposed credentials, scrape
 - Participant readiness indicators and host removal controls
 - Built-in ephemeral chat with bounded history
 - Optional TMDB movie/TV metadata search
+- Free source search across RamoFlix and DoraBy (server-side, no API keys)
+- Free source embeds with strict host allowlisting + locked-down stream proxy
 - Responsive dark interface
 - Health endpoint and Render deployment configuration
 - No runtime npm dependencies
+
+## Free sources (ramoflix.net + doraby.com)
+
+The media dialog has a **Free sources** tab. It searches both sites server-side
+(WordPress `?s=`), reads each title's fmovie `Servers` blob, and lets the host
+share one of the site's embed servers with the room.
+
+- The embed media kind is validated against a fixed allowlist of embed hosts
+  (soap2night.cc, player.videasy.net, vidfast.pro, vidfast.vc, vidcore.net,
+  player.vidzee.wtf, 111movies.com, ramoflix.net, doraby.com).
+- `/api/stream` is a locked-down proxy: only allowlisted hosts, HTTPS only,
+  Referer forwarding for the source site, and HLS manifests are rewritten so
+  segment requests go through the same allowlisted proxy. Segment hosts are
+  approved dynamically from parsed manifests for 10 minutes — arbitrary hosts
+  stay blocked (the old unrestricted proxy is gone).
+- Embeds play in the room as the source site intends; direct-stream sync is
+  best-effort since third-party players are iframes.
 
 ## Requirements
 
@@ -45,7 +64,7 @@ npm test
 npm run check
 ```
 
-The integration suite covers HTTP health, room creation, password validation, WebSocket joining, host permissions, media synchronization, playback synchronization, chat, and removal of the old proxy route.
+The integration suite covers HTTP health, room creation, password validation, WebSocket joining, host permissions, media synchronization, playback synchronization, chat, media validation, and proxy host allowlisting.
 
 ## Optional TMDB search
 
