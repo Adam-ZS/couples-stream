@@ -66,6 +66,11 @@ test('media validation accepts lawful source types and blocks unsafe URLs', () =
     { id: 'one', kind: 'youtube', youtubeId: 'dQw4w9WgXcQ', title: 'Video', poster: '' },
   );
   assert.equal(normalizeMedia({ kind: 'url', url: 'https://example.com/video.mp4' }).url, 'https://example.com/video.mp4');
+  // embed kind: allowlisted hosts pass, arbitrary hosts are blocked
+  assert.equal(normalizeMedia({ kind: 'embed', url: 'https://vidcore.net/movie/27205' }).embedHost, 'vidcore.net');
+  assert.equal(normalizeMedia({ kind: 'embed', url: 'https://ramoflix.net/inception' }).embedHost, 'ramoflix.net');
+  assert.equal(normalizeMedia({ kind: 'embed', url: 'https://evil.example/embed' }), null);
+  assert.equal(normalizeMedia({ kind: 'embed', url: 'http://vidcore.net/movie/1' }), null);
 });
 
 test('room position advances only while playing', () => {
@@ -98,6 +103,12 @@ test('HTTP and WebSocket room flow is synchronized and permissioned', async (t) 
 
   const removedProxy = await fetch(`${httpBase}/api/proxy?url=https://example.com/video.mp4`);
   assert.equal(removedProxy.status, 404);
+
+  const blockedProxy = await fetch(`${httpBase}/api/stream?u=https://evil.example/x.m3u8`);
+  assert.equal(blockedProxy.status, 403);
+
+  const nonMediaProxy = await fetch(`${httpBase}/api/stream?u=https://vidcore.net/nope`);
+  assert.equal(nonMediaProxy.status, 415);
 
   const wrong = await openSocket(wsBase);
   wrong.send({ type: 'join', roomId: room.roomId, name: 'Wrong', password: 'bad', clientId: 'wrong_client_123' });

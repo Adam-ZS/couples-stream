@@ -862,8 +862,12 @@ function createServer(options = {}) {
             });
             return res.end(rewritten);
           }
-          // Non-manifest: pipe through (video segments / subtitles).
+          // Non-manifest: pipe through only media/subtitle types (video segments,
+          // subtitles, audio). HTML/JS responses from embed hosts are never
+          // proxied — they are client-side SPA shells, not media.
+          const isMedia = /^(video|audio)\/|application\/octet-stream|text\/vtt|application\/x-subrip|application\/vnd\.apple\.mpegurl|mpegurl|x-mpegurl|text\/plain/.test(contentType);
           if (!upstream.body) return json(res, 502, { error: 'Upstream body missing' });
+          if (!isMedia) return json(res, 415, { error: 'Not a media stream' });
           res.writeHead(200, {
             'Content-Type': contentType,
             'Cache-Control': 'no-store',
@@ -871,6 +875,7 @@ function createServer(options = {}) {
           });
           return upstream.body.pipe(res);
         } catch (error) {
+          if (res.headersSent) return res.destroy();
           return json(res, error.name === 'AbortError' ? 504 : 502, { error: error.name === 'AbortError' ? 'Stream timed out' : 'Stream failed' });
         } finally {
           clearTimeout(timer);
