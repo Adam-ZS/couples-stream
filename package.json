@@ -1,0 +1,18 @@
+{
+  "name": "watch-together-sync",
+  "version": "2.0.0",
+  "description": "Private, account-free synchronized watch rooms for lawful media sources.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test",
+    "check": "node --check server.js && node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": ["watch-party", "websocket", "synchronized-video"],
+  "license": "MIT",
+  "type": "commonjs"
+}

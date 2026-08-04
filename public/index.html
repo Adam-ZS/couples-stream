@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#090b10">
+  <meta name="description" content="Private, account-free synchronized watch rooms for media you are authorized to play.">
+  <title>Watch Together</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js"></script>
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <main id="landing" class="landing-shell">
+    <section class="hero-card">
+      <div class="brand-mark" aria-hidden="true">▶</div>
+      <p class="eyebrow">PRIVATE WATCH ROOMS</p>
+      <h1>Watch together.<br><span>Stay perfectly in step.</span></h1>
+      <p class="hero-copy">Create a room, share one link, and synchronize a lawful video URL, YouTube video, or matching local file. No account required.</p>
+
+      <div id="joinNotice" class="join-notice hidden">
+        <span class="status-dot"></span>
+        You were invited to room <strong id="invitedRoom"></strong>
+      </div>
+
+      <form id="entryForm" class="entry-form">
+        <label>
+          <span>Your display name</span>
+          <input id="nameInput" maxlength="32" autocomplete="nickname" placeholder="Alex" required>
+        </label>
+        <label id="roomField">
+          <span>Room code</span>
+          <input id="roomInput" maxlength="32" autocomplete="off" placeholder="Paste a room code">
+        </label>
+        <label>
+          <span>Room password <em>optional</em></span>
+          <input id="passwordInput" maxlength="128" type="password" autocomplete="current-password" placeholder="Only if the room uses one">
+        </label>
+        <div class="entry-actions">
+          <button id="createRoomBtn" class="primary-btn" type="button">Create room</button>
+          <button id="joinRoomBtn" class="secondary-btn" type="submit">Join room</button>
+        </div>
+      </form>
+
+      <div class="feature-row" aria-label="Features">
+        <span>Real-time sync</span><span>Built-in chat</span><span>Host controls</span><span>Mobile ready</span>
+      </div>
+      <p class="legal-note">Use only media you own, created, or are authorized to access.</p>
+    </section>
+  </main>
+
+  <div id="app" class="app-shell hidden">
+    <header class="topbar">
+      <div class="brand-small"><span>▶</span> Watch Together</div>
+      <button id="roomCopyBtn" class="room-chip" title="Copy invite link">
+        <span class="status-dot"></span><span id="roomLabel">Room</span><span aria-hidden="true">⧉</span>
+      </button>
+      <div class="topbar-spacer"></div>
+      <div id="connectionBadge" class="connection-badge connecting">Connecting…</div>
+      <button id="addMediaBtn" class="primary-btn compact">＋ Add media</button>
+    </header>
+
+    <div class="workspace">
+      <section class="watch-column">
+        <div id="playerStage" class="player-stage">
+          <div id="emptyPlayer" class="empty-player">
+            <div class="empty-icon">▶</div>
+            <h2>Choose something to watch</h2>
+            <p>Add a direct video or HLS URL, a YouTube link, or a local file each participant already has.</p>
+            <button id="emptyAddBtn" class="primary-btn">Add media</button>
+          </div>
+
+          <video id="videoPlayer" class="media-surface hidden" playsinline preload="metadata"></video>
+          <div id="youtubeSurface" class="media-surface hidden"><div id="youtubeMount"></div></div>
+          <div id="embedSurface" class="media-surface hidden"><iframe id="embedFrame" title="Embedded source" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" referrerpolicy="no-referrer-when-downgrade"></iframe></div>
+
+          <div id="localFileGate" class="local-gate hidden">
+            <div class="gate-card">
+              <span class="gate-icon">⌁</span>
+              <h3>Select your matching local file</h3>
+              <p id="localFileDescription">Your partner chose a local file. It never uploads to the server.</p>
+              <label class="primary-btn file-label">Choose file<input id="matchingFileInput" type="file" accept="video/*"></label>
+            </div>
+          </div>
+
+          <div id="playerOverlay" class="player-overlay hidden">
+            <div class="spinner"></div><span id="overlayText">Loading media…</span>
+          </div>
+        </div>
+
+        <div id="controls" class="controls disabled">
+          <button id="playBtn" class="icon-btn" aria-label="Play">▶</button>
+          <span id="currentTime">0:00</span>
+          <input id="seekBar" type="range" min="0" max="1000" value="0" aria-label="Seek">
+          <span id="durationTime">0:00</span>
+          <select id="rateSelect" aria-label="Playback speed">
+            <option value="0.5">0.5×</option>
+            <option value="0.75">0.75×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2×</option>
+          </select>
+          <button id="syncNowBtn" class="text-btn">Sync now</button>
+          <button id="fullscreenBtn" class="icon-btn" aria-label="Fullscreen">⛶</button>
+        </div>
+
+        <div class="media-info-bar">
+          <div class="media-info-main">
+            <img id="mediaPoster" class="media-poster hidden" alt="">
+            <div>
+              <strong id="mediaTitle">Nothing playing</strong>
+              <span id="mediaKind">Add media to begin</span>
+            </div>
+          </div>
+          <div id="readinessText" class="readiness">0 ready</div>
+        </div>
+      </section>
+
+      <aside class="sidebar">
+        <div class="sidebar-tabs">
+          <button class="tab-btn active" data-tab="chat">Chat</button>
+          <button class="tab-btn" data-tab="people">People <span id="peopleCount">0</span></button>
+          <button class="tab-btn" data-tab="settings">Room</button>
+        </div>
+
+        <section id="chatPanel" class="side-panel active">
+          <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+          <form id="chatForm" class="chat-form">
+            <input id="chatInput" maxlength="500" autocomplete="off" placeholder="Write a message…">
+            <button class="send-btn" aria-label="Send">➤</button>
+          </form>
+        </section>
+
+        <section id="peoplePanel" class="side-panel">
+          <div id="peopleList" class="people-list"></div>
+        </section>
+
+        <section id="settingsPanel" class="side-panel settings-panel">
+          <div class="setting-card">
+            <div>
+              <strong>Playback control</strong>
+              <p>Choose who can play, pause, seek, and change media.</p>
+            </div>
+            <select id="controlPolicySelect">
+              <option value="everyone">Everyone</option>
+              <option value="host">Host only</option>
+            </select>
+          </div>
+          <button id="copyLinkSettingsBtn" class="secondary-btn full">Copy invite link</button>
+          <button id="leaveRoomBtn" class="danger-btn full">Leave room</button>
+          <p class="settings-note">Rooms are temporary and automatically expire. No chat or media history is written to a database.</p>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <dialog id="mediaDialog" class="media-dialog">
+    <form method="dialog" class="dialog-shell">
+      <div class="dialog-header">
+        <div><p class="eyebrow">ROOM MEDIA</p><h2>Add something to watch</h2></div>
+        <button class="close-btn" value="cancel" aria-label="Close">×</button>
+      </div>
+
+      <div class="source-tabs">
+        <button type="button" class="source-tab active" data-source-panel="url">Video URL</button>
+        <button type="button" class="source-tab" data-source-panel="youtube">YouTube</button>
+        <button type="button" class="source-tab" data-source-panel="local">Local file</button>
+        <button type="button" class="source-tab" data-source-panel="sources">Free sources</button>
+        <button type="button" class="source-tab" data-source-panel="discover">Discover</button>
+      </div>
+
+      <section class="source-panel active" id="source-url">
+        <label><span>Direct HTTPS video or HLS URL</span><input id="urlInput" type="url" placeholder="https://example.com/movie.m3u8"></label>
+        <label><span>Title <em>optional</em></span><input id="urlTitleInput" maxlength="160" placeholder="Movie night"></label>
+        <p class="input-help">The URL is loaded directly by each participant. The server does not proxy, download, or inspect the media.</p>
+        <button id="addUrlBtn" type="button" class="primary-btn full">Share URL with room</button>
+        <button id="addDemoBtn" type="button" class="secondary-btn full">Use public demo video</button>
+      </section>
+
+      <section class="source-panel" id="source-youtube">
+        <label><span>YouTube URL</span><input id="youtubeInput" placeholder="https://youtu.be/…"></label>
+        <label><span>Title <em>optional</em></span><input id="youtubeTitleInput" maxlength="160" placeholder="YouTube video"></label>
+        <p class="input-help">Playback uses YouTube’s official embedded player. Availability and ads depend on YouTube.</p>
+        <button id="addYoutubeBtn" type="button" class="primary-btn full">Share YouTube video</button>
+      </section>
+
+      <section class="source-panel" id="source-local">
+        <div class="local-drop">
+          <span class="gate-icon">⌁</span>
+          <h3>Play a file without uploading it</h3>
+          <p>Each participant selects the same file on their own device. Only a filename fingerprint is shared.</p>
+          <label class="primary-btn file-label">Choose local video<input id="localFileInput" type="file" accept="video/*"></label>
+        </div>
+      </section>
+
+      <section class="source-panel" id="source-sources">
+        <label><span>Search free sources</span><input id="sourcesInput" autocomplete="off" placeholder="Search a title…"></label>
+        <p class="input-help">Results are fetched from RamoFlix and DoraBy. Pick a title, then choose a server. Embeds play in the room; direct streams are proxied with strict host allowlisting.</p>
+        <div id="sourcesResults" class="discover-results"></div>
+      </section>
+
+      <section class="source-panel" id="source-discover">
+        <label><span>Search movie and TV metadata</span><input id="discoverInput" autocomplete="off" placeholder="Search a title…"></label>
+        <p id="discoverHelp" class="input-help">TMDB search is optional and requires a server environment key.</p>
+        <div id="discoverResults" class="discover-results"></div>
+      </section>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
