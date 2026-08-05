@@ -781,7 +781,10 @@ function createServer(options = {}) {
         try {
           const results = [];
           for (const source of sources.SOURCES) {
-            const found = await sources.searchSite(source, query);
+            let found;
+            if (source.id === 'hydra') found = await sources.searchHydra(query);
+            else if (source.id === '67movies') found = await sources.search67Movies(query);
+            else found = await sources.searchSite(source, query);
             for (const item of found) results.push(item);
           }
           // Merge duplicates across sites by normalized title slug.
@@ -828,10 +831,10 @@ function createServer(options = {}) {
           if (detail.error) return json(res, detail.status === 404 ? 404 : 502, { error: detail.error });
           const resolved = await sources.resolveDetail(detail);
           if (!resolved.ok) return json(res, 502, { error: resolved.error || 'No playable source' });
-          // Sniff the upstream content-type to tell the client whether this is
-          // an HLS manifest (needs hls.js) or a progressive MP4.
-          let streamKind = 'mp4';
-          if (resolved.type === 'direct' && resolved.url) {
+          // Prefer the resolver's sniffed streamKind (backend-based, verified).
+          // Only probe upstream as a fallback so a failed probe can't mislabel.
+          let streamKind = resolved.streamKind || 'mp4';
+          if ((!resolved.streamKind || resolved.type !== 'direct') && resolved.url) {
             const probe = new AbortController();
             const probeTimer = setTimeout(() => probe.abort(), 8000);
             try {
@@ -852,7 +855,7 @@ function createServer(options = {}) {
               const probeCt = probeRes.headers.get('content-type') || '';
               if (/m3u8|vnd\.apple\.mpegurl/.test(probeCt)) streamKind = 'hls';
             } catch {
-              /* probe failure falls back to mp4 guess */
+              /* probe failure: keep resolver's streamKind */
             } finally {
               clearTimeout(probeTimer);
             }
@@ -894,7 +897,7 @@ function createServer(options = {}) {
         if (from) headers.Referer = from;
         // Ballerina stream URLs need browser-like Origin/Sec-Fetch headers for
         // range (seek) requests — without them the CDN returns 403 on ranges.
-        if (targetHost === 'ballerinacappuccinalovestungtungtungsahur.com' || targetHost === 'c.ballerinacappuccinalovestungtungtungsahur.com') {
+        if (targetHost === 'ballerinacappuccinalovestungtungtungsahur.com' || targetHost === 'c.ballerinacappuccinalovestungtungtungsahur.com' || targetHost === 'b.ballerinacappuccinalovestungtungtungsahur.com') {
           headers.Origin = 'https://player.vidlove.cc';
           headers['Accept'] = '*/*';
           headers['Sec-Fetch-Dest'] = 'video';
