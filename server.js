@@ -787,10 +787,11 @@ function createServer(options = {}) {
             else found = await sources.searchSite(source, query);
             for (const item of found) results.push(item);
           }
-          // Merge duplicates across sites by normalized title slug.
+          // Dedup per (source, url) so a title reachable via two sources is
+          // shown under both (e.g. hydra's 67-fallback vs the 67Movies row).
           const seen = new Map();
           for (const item of results) {
-            const key = item.url.replace(/^https?:\/\//, '');
+            const key = (item.source || '') + '|' + item.url.replace(/^https?:\/\//, '');
             if (!seen.has(key)) seen.set(key, item);
           }
           return json(res, 200, { results: [...seen.values()] });
