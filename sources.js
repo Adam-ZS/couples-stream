@@ -174,13 +174,51 @@ async function searchSite(source, query) {
   return unique.slice(0, 10);
 }
 
+/**
+ * Derive a TMDB id + media_type for a hydra title by querying 67Movies'
+ * public semantic-search (which passes Cloudflare from datacenter egress).
+ * Used when HydraHD itself blocks our fetch but we already know the title
+ * (from its URL slug or a search query).
+ */
+async function hydraLookupByTitle(titleQuery) {
+  const base = 'https://67movies.net/api/semantic-search';
+  const { status, ok, body } = await fetchPage(`${base}?q=${encodeURIComponent(titleQuery)}`, { referer: 'https://67movies.net/' });
+  if (!ok || status !== 200) return null;
+  let data;
+  try { data = JSON.parse(body); } catch { return null; }
+  const item = (data.results || [])[0];
+  if (!item || !item.id) return null;
+  return {
+    tmdbId: String(item.id),
+    mediaType: item.media_type === 'tv' ? 'tv' : 'movie',
+    backupTitle: cleanText(item.title || item.name || '', 200),
+  };
+}
+
+/**
+ * Fallback list for hydra search: pull 67Movies' semantic results and brand
+ * them as HydraHD so the search UI always shows hydra hits, even when hydra's
+ * Cloudflare blocks datacenter egress.
+ */
+async function resolveLookupList(query) {
+  const via = await search67Movies(query);
+  return via.map((r) => ({ ...r, source: 'hydra', sourceName: 'HydraHD' })).slice(0, 12);
+}
+
 /** Search HydraHD: /index.php?menu=search&query=QUERY -> movies + series. */
 async function searchHydra(query) {
   const url = `https://hydrahd.ru/index.php?menu=search&query=${encodeURIComponent(query)}`;
   const { status, ok, body } = await fetchPageRobust(url, { referer: 'https://hydrahd.ru/' });
-  if (!ok || status !== 200) return [];
+  if (!ok || status !== 200) {
+    // Fall back to 67Movies-derived results so hydra still returns hits even
+    // when Cloudflare blocks our egress.
+    const via = await resolveLookupList(query);
+    return via;
+  }
   const results = [];
   // Hydra lists results as <a class="hthis" href="..." title="...">
+  // (kept for when hydra is reachable; Cloudflare-blocked egress falls back
+  // to resolveLookupList above).
   const anchorRe = /<a[^>]+href="([^"]+)"[^>]+title="([^"]*)"[^>]*>/gi;
   let match;
   while ((match = anchorRe.exec(body))) {
@@ -298,10 +336,55 @@ function parseHydraPage(body, url = '') {
   return { tmdbId, imdbId, mediaType: mediaType === 'series' ? 'tv' : 'movie', season, episode, embedServers: [] };
 }
 
+/**
+ * Extract a searchable human title from a HydraHD URL slug.
+ * - /movie/200584-watch-peaky-blinders-the-immortal-man-2026-online
+ *   -> "peaky blinders the immortal man"
+ * - /watchseries/peaky-blinders-online-free/season/1/episode/1
+ *   -> "peaky blinders"
+ */
+function titleSlugToText(url) {
+  try {
+    const u = new URL(url);
+    const segs = u.pathname.split('/').filter(Boolean);
+    if (!segs.length) return '';
+    let slug = segs[0] === 'watchseries' ? (segs[1] || '') : (segs[0] === 'movie' ? (segs[1] || '') : (segs[0] || ''));
+    slug = slug
+      .replace(/^(watch|movie|series)-/i, '')
+      .replace(/^\d+[-_ ]?/, '') // drop leading numeric id like "200584-"
+      .replace(/(-online-free|-online|-hd|-full|-watch|-streaming|-film)$/i, '')
+      .replace(/(-19\d\d|-20\d\d)$/i, '') // drop trailing year
+      .replace(/[-_]+/g, ' ')
+      .trim();
+    return slug;
+  } catch {
+    return '';
+  }
+}
+
 /** Fetch a HydraHD page (movie or series) and return a parseHydra detail. */
 async function hydraDetail(url) {
   const { ok, status, body, crawler } = await fetchPageRobust(url, { referer: 'https://hydrahd.ru/' });
-  if (!ok || status !== 200) return { status, error: `Detail page unavailable (http ${status}${crawler ? ', crawler-ua' : ''})` };
+  if (!ok || status !== 200) {
+    // Cloudflare blocked us (typical of datacenter egress). Hydra embeds the
+    // title in the URL slug — derive it, look the TMDB id up via 67Movies'
+    // public API, and build the same detail shape so resolution still works.
+    const title = titleSlugToText(url);
+    if (!title) return { status, error: `Detail unavailable (http ${status})` };
+    const lookup = await hydraLookupByTitle(title);
+    if (!lookup) return { status, error: `Detail page unavailable (http ${status})` };
+    const parsed = parseHydraPage('', url); // extracts season/episode/mediaType only
+    return {
+      status: 200,
+      tmdbId: lookup.tmdbId,
+      imdbId: '',
+      mediaType: lookup.mediaType,
+      season: parsed.season,
+      episode: parsed.episode,
+      embedServers: [],
+      title: lookup.backupTitle,
+    };
+  }
   const parsed = parseHydraPage(body, url);
   if (!parsed.tmdbId) return { status: 200, error: 'No resolvable TMDB id on this page' };
   return { status: 200, ...parsed };
