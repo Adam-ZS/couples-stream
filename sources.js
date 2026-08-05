@@ -99,6 +99,42 @@ async function fetchPage(url, { referer = '', timeoutMs = 12_000 } = {}) {
   }
 }
 
+/**
+ * Fetch a page with a Cloudflare-aware retry: if the first request is blocked
+ * (non-200 / empty / CF challenge), retry with a trusted crawler UA + full
+ * browser headers. Datacenter egress (Render) is frequently bot-challenged by
+ * Cloudflare on undici/TLS-fingerprint alone; the crawler UA passes where a
+ * plain browser UA is flagged.
+ */
+async function fetchPageRobust(url, { referer = '', timeoutMs = 15_000 } = {}) {
+  const first = await fetchPage(url, { referer, timeoutMs });
+  if (first.ok && first.status === 200 && first.body && first.body.trim().length > 0) {
+    return first;
+  }
+  // Retry with a trusted crawler fingerprint + full document headers.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'cross-site',
+      'Upgrade-Insecure-Requests': '1',
+    };
+    if (referer) headers.Referer = referer;
+    const response = await fetch(url, { headers, signal: controller.signal, redirect: 'follow' });
+    const body = await response.text();
+    return { status: response.status, ok: response.ok, body, finalUrl: response.url, crawler: true };
+  } catch (error) {
+    return { status: 0, ok: false, body: '', finalUrl: url, error: error.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Search a fmovie/WordPress site: /?s=QUERY -> list of post links + titles. */
 async function searchSite(source, query) {
   const url = `${source.domain}/?s=${encodeURIComponent(query)}`;
@@ -141,7 +177,7 @@ async function searchSite(source, query) {
 /** Search HydraHD: /index.php?menu=search&query=QUERY -> movies + series. */
 async function searchHydra(query) {
   const url = `https://hydrahd.ru/index.php?menu=search&query=${encodeURIComponent(query)}`;
-  const { status, ok, body } = await fetchPage(url, { referer: 'https://hydrahd.ru/' });
+  const { status, ok, body } = await fetchPageRobust(url, { referer: 'https://hydrahd.ru/' });
   if (!ok || status !== 200) return [];
   const results = [];
   // Hydra lists results as <a class="hthis" href="..." title="...">
@@ -264,7 +300,7 @@ function parseHydraPage(body, url = '') {
 
 /** Fetch a HydraHD page (movie or series) and return a parseHydra detail. */
 async function hydraDetail(url) {
-  const { ok, status, body } = await fetchPage(url, { referer: 'https://hydrahd.ru/' });
+  const { ok, status, body } = await fetchPageRobust(url, { referer: 'https://hydrahd.ru/' });
   if (!ok || status !== 200) return { status, error: 'Detail page unavailable' };
   const parsed = parseHydraPage(body, url);
   if (!parsed.tmdbId) return { status: 200, error: 'No resolvable TMDB id on this page' };
@@ -537,6 +573,7 @@ module.exports = {
   search67Movies,
   searchSite,
   fetchPage,
+  fetchPageRobust,
   detailPage,
   resolveEmbed,
   resolveDetail,
