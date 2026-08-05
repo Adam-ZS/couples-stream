@@ -955,7 +955,33 @@ function renderSourceServers(result, detail) {
   header.className = 'input-help';
   header.textContent = `${result.title} — pick a server. Direct plays in the synced player; others load as embeds.`;
   els.sourcesResults.append(header);
-  (detail.embedServers || []).forEach((server) => {
+  const embedServers = detail.embedServers || [];
+  // If this detail is TMDB-resolvable (movie/tv), always offer the direct
+  // stream even when the page exposes no embed servers (67Movies, HydraHD,
+  // fmovie TV-series pages all return zero embeds but a resolvable TMDB id).
+  const resolvable = detail.tmdbId || detail.mediaType === 'tv';
+  if (resolvable) {
+    const card = document.createElement('article');
+    card.className = 'discover-card';
+    const copy = document.createElement('div');
+    const title = document.createElement('h3');
+    title.textContent = (detail.mediaType === 'tv' || detail.mediaType === 'series') ? 'Play series (synced)' : 'Play direct (synced)';
+    const meta = document.createElement('p');
+    meta.className = 'discover-meta';
+    meta.textContent = detail.mediaType === 'series' || detail.mediaType === 'tv' ? 'Season 1 · episode 1 (sync)' : 'Streamed through the synced player';
+    copy.append(title, meta);
+    const actions = document.createElement('div');
+    actions.className = 'discover-actions';
+    const direct = document.createElement('button');
+    direct.type = 'button';
+    direct.textContent = 'Play direct (synced)';
+    direct.addEventListener('click', () => playSourceDirect(result, detail));
+    actions.append(direct);
+    copy.append(actions);
+    card.append(copy);
+    els.sourcesResults.append(card);
+  }
+  embedServers.forEach((server) => {
     const card = document.createElement('article');
     card.className = 'discover-card';
     const copy = document.createElement('div');

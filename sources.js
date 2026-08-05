@@ -311,10 +311,41 @@ function parseServers(body) {
 }
 
 /**
- * Extract the TMDB id (and for series the season/episode) from a HydraHD
- * movie or watchseries page. Hydra leaks these as string params near the
- * player AJAX handler: "i":"ttIMDB","t":"TMDB", "s":"S", "e":"E".
+ * Parse a fmovie TV-series detail page. TV pages carry `var Episodes = {...}`
+ * (with the TMDB series id under "tvid") instead of a movie `var Servers`
+ * blob. Returns a detail object shaped like parseServers, with mediaType 'tv'
+ * and no embeds — resolution goes through the ballerina /tv endpoint.
  */
+function parseTvSeries(body) {
+  const m = body.match(/var Episodes\s*=\s*(\{[\s\S]*?\});/);
+  if (!m) return null;
+  try {
+    const raw = m[1]
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":');
+    const blob = JSON.parse(raw);
+    const tmdbId = String(blob.tvid || '');
+    if (!tmdbId) return null;
+    const poster = (() => {
+      try {
+        const image = blob.base_poster ? String(blob.base_poster) : '';
+        return image;
+      } catch { return ''; }
+    })();
+    return {
+      postId: String(blob.post_id ?? ''),
+      tmdbId,
+      imdbId: String(blob.tvimdbid ?? ''),
+      mediaType: 'tv',
+      poster: poster.startsWith('//') ? 'https:' + poster : poster,
+      voteAverage: String(blob.vote_average ?? ''),
+      domain: '',
+      embedServers: [],
+    };
+  } catch {
+    return null;
+  }
+}
 function parseHydraPage(body, url = '') {
   const tMatch = body.match(/"t"\s*:\s*"(\d+)"/);
   const iMatch = body.match(/"i"\s*:\s*"?(tt\d+)"?/);
@@ -413,7 +444,12 @@ async function detailPage(url) {
   const { ok, status, body } = await fetchPage(url, { referer });
   if (!ok || status !== 200) return { status, error: 'Detail page unavailable' };
   const parsed = parseServers(body);
-  if (!parsed) return { status: 200, error: 'No playable servers found on this page' };
+  if (!parsed) {
+    // Might be a TV-series page (var Episodes, no movie Servers blob).
+    const tv = parseTvSeries(body);
+    if (tv) return { status: 200, ...tv };
+    return { status: 200, error: 'No playable servers found on this page' };
+  }
   // limit poster to https
   if (parsed.poster && !parsed.poster.startsWith('https://')) parsed.poster = '';
   return { status: 200, ...parsed };
