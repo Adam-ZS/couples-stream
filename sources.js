@@ -300,8 +300,8 @@ function parseHydraPage(body, url = '') {
 
 /** Fetch a HydraHD page (movie or series) and return a parseHydra detail. */
 async function hydraDetail(url) {
-  const { ok, status, body } = await fetchPageRobust(url, { referer: 'https://hydrahd.ru/' });
-  if (!ok || status !== 200) return { status, error: 'Detail page unavailable' };
+  const { ok, status, body, crawler } = await fetchPageRobust(url, { referer: 'https://hydrahd.ru/' });
+  if (!ok || status !== 200) return { status, error: `Detail page unavailable (http ${status}${crawler ? ', crawler-ua' : ''})` };
   const parsed = parseHydraPage(body, url);
   if (!parsed.tmdbId) return { status: 200, error: 'No resolvable TMDB id on this page' };
   return { status: 200, ...parsed };
