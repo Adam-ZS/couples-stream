@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for taking the time to fill out this bug report."
+  - type: input
+    id: version
+    attributes:
+      label: Node version
+      description: Output of `node -v`
+      placeholder: "v20.11.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Where are you seeing this?
+      options:
+        - Local (npm start)
+        - Render (live demo)
+        - Other deployment
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what actually occurred?
+      placeholder: "Steps to reproduce: join a room, play a stream, seek..."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output / logs
+      description: Paste the relevant terminal or browser console output.
+      render: shell
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      options:
+        - Room / chat sync
+        - Media playback (direct / HLS)
+        - Free sources (search / resolve / proxy)
+        - Room join / reconnect
+        - Security / CSP
+        - Other
+  - type: checkboxes
+    id: media
+    attributes:
+      label: Media authorization
+      description: Confirm (real data is not shown to anyone)
+      options:
+        - label: I only tested with media I am authorized to access
+          required: true

@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest an idea for this project
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for suggesting a feature."
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do, and why doesn't the current app cover it?
+      placeholder: "e.g. I want to sync local files without all participants picking them manually."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How do you imagine the feature working?
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope impact
+      options:
+        - UI / UX only
+        - New media kind
+        - New source / provider
+        - Sync engine change
+        - Infrastructure / deployment
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Trade-offs / constraints
+      description: Runtime deps? Security-model impact? Single-file constraint?
+      render: markdown
