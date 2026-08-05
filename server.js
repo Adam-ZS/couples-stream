@@ -5,6 +5,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { EventEmitter } = require('events');
+const { Readable } = require('stream');
 const { TextDecoder } = require('util');
 const sources = require('./sources');
 
@@ -813,13 +814,73 @@ function createServer(options = {}) {
         }
       }
 
+      // Resolve a detail page into a playable stream. Returns a direct MP4 or
+      // HLS stream URL (playable in the synced player through /api/stream) plus
+      // subtitle tracks and quality variants when the vidlove/ballerina path is
+      // available; otherwise falls back to an embed URL.
+      if (req.method === 'GET' && pathname === '/api/sources/resolve') {
+        const target = cleanText(url.searchParams.get('url'), 300);
+        if (!/^https?:\/\//.test(target)) return json(res, 400, { error: 'Missing source URL' });
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20_000);
+        try {
+          const detail = await sources.detailPage(target);
+          if (detail.error) return json(res, detail.status === 404 ? 404 : 502, { error: detail.error });
+          const resolved = await sources.resolveDetail(detail);
+          if (!resolved.ok) return json(res, 502, { error: resolved.error || 'No playable source' });
+          // Sniff the upstream content-type to tell the client whether this is
+          // an HLS manifest (needs hls.js) or a progressive MP4.
+          let streamKind = 'mp4';
+          if (resolved.type === 'direct' && resolved.url) {
+            const probe = new AbortController();
+            const probeTimer = setTimeout(() => probe.abort(), 8000);
+            try {
+              const probeRes = await fetch(resolved.url, {
+                headers: {
+                  'User-Agent': sources.UA,
+                  Referer: resolved.referer || 'https://player.vidlove.cc/',
+                  Origin: (() => { try { return new URL(resolved.referer || 'https://player.vidlove.cc/').origin; } catch { return 'https://player.vidlove.cc'; } })(),
+                  'Accept': '*/*',
+                  'Sec-Fetch-Dest': 'video',
+                  'Sec-Fetch-Mode': 'no-cors',
+                  'Sec-Fetch-Site': 'cross-site',
+                  Range: 'bytes=0-2047',
+                },
+                signal: probe.signal,
+                redirect: 'follow',
+              });
+              const probeCt = probeRes.headers.get('content-type') || '';
+              if (/m3u8|vnd\.apple\.mpegurl/.test(probeCt)) streamKind = 'hls';
+            } catch {
+              /* probe failure falls back to mp4 guess */
+            } finally {
+              clearTimeout(probeTimer);
+            }
+          }
+          return json(res, 200, {
+            detail,
+            type: resolved.type,
+            label: resolved.label || '',
+            url: resolved.url,
+            streamKind,
+            qualities: resolved.qualities || [],
+            subtitles: resolved.subtitles || [],
+            referer: resolved.referer || '',
+          });
+        } catch (error) {
+          return json(res, error.name === 'AbortError' ? 504 : 502, { error: error.name === 'AbortError' ? 'Source resolve timed out' : 'Source resolve failed' });
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
       // Locked-down stream proxy: only allowlist hosts, HTTPS only, streams
       // forwarded with the proper Referer for the embed source. This replaces
       // the old unrestricted /api/proxy with a strict allowlist. HLS segment
       // hosts are approved dynamically from parsed manifests so playback works
       // while arbitrary hosts stay unreachable.
       if (req.method === 'GET' && pathname === '/api/stream') {
-        const target = cleanText(url.searchParams.get('u'), 500);
+        const target = cleanText(url.searchParams.get('u'), 2500);
         const from = cleanText(url.searchParams.get('ref'), 300);
         if (!/^https?:\/\//.test(target)) return json(res, 400, { error: 'Missing stream URL' });
         let targetHost;
@@ -831,7 +892,19 @@ function createServer(options = {}) {
         const timer = setTimeout(() => controller.abort(), 20_000);
         const headers = { 'User-Agent': sources.UA };
         if (from) headers.Referer = from;
+        // Ballerina stream URLs need browser-like Origin/Sec-Fetch headers for
+        // range (seek) requests — without them the CDN returns 403 on ranges.
+        if (targetHost === 'ballerinacappuccinalovestungtungtungsahur.com' || targetHost === 'c.ballerinacappuccinalovestungtungtungsahur.com') {
+          headers.Origin = 'https://player.vidlove.cc';
+          headers['Accept'] = '*/*';
+          headers['Sec-Fetch-Dest'] = 'video';
+          headers['Sec-Fetch-Mode'] = 'no-cors';
+          headers['Sec-Fetch-Site'] = 'cross-site';
+          if (!from) headers.Referer = 'https://player.vidlove.cc/';
+        }
         try {
+          // Forward the client's Range header so seeking works through the proxy.
+          if (req.headers.range) headers.Range = req.headers.range;
           const upstream = await fetch(target, { headers, signal: controller.signal, redirect: 'follow' });
           const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
           if (upstream.status === 200 && /m3u8|vnd\.apple\.mpegurl/.test(contentType)) {
@@ -868,12 +941,18 @@ function createServer(options = {}) {
           const isMedia = /^(video|audio)\/|application\/octet-stream|text\/vtt|application\/x-subrip|application\/vnd\.apple\.mpegurl|mpegurl|x-mpegurl|text\/plain/.test(contentType);
           if (!upstream.body) return json(res, 502, { error: 'Upstream body missing' });
           if (!isMedia) return json(res, 415, { error: 'Not a media stream' });
-          res.writeHead(200, {
+          res.writeHead(upstream.status === 206 ? 206 : 200, {
             'Content-Type': contentType,
+            'Content-Length': upstream.headers.get('content-length') || undefined,
+            'Content-Range': upstream.headers.get('content-range') || undefined,
+            'Accept-Ranges': upstream.headers.get('accept-ranges') || 'bytes',
             'Cache-Control': 'no-store',
             'Access-Control-Allow-Origin': '*',
           });
-          return upstream.body.pipe(res);
+          // fetch() bodies are web ReadableStreams — convert to a Node stream
+          // for .pipe(). (Missing this used to throw after writeHead and tear
+          // the connection down with an "empty reply".)
+          return Readable.fromWeb(upstream.body).pipe(res);
         } catch (error) {
           if (res.headersSent) return res.destroy();
           return json(res, error.name === 'AbortError' ? 504 : 502, { error: error.name === 'AbortError' ? 'Stream timed out' : 'Stream failed' });

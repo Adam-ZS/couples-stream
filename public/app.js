@@ -474,7 +474,7 @@ async function loadMedia(media, playback) {
 
   try {
     if (media.kind === 'url' || media.kind === 'demo') {
-      await loadHtml5(media.url);
+      await loadHtml5(media.url, { hls: !!media.hls });
     } else if (media.kind === 'youtube') {
       await loadYouTube(media.youtubeId);
     } else if (media.kind === 'embed') {
@@ -533,11 +533,11 @@ function loadEmbed(url) {
   markPlayerReady();
 }
 
-function loadHtml5(url) {
+function loadHtml5(url, { hls = false } = {}) {
   return new Promise((resolve, reject) => {
     els.video.classList.remove('hidden');
     const pathName = (() => { try { return new URL(url, location.href).pathname.toLowerCase(); } catch { return ''; } })();
-    const isHls = pathName.endsWith('.m3u8');
+    const isHls = hls || pathName.endsWith('.m3u8');
     let settled = false;
     const finish = () => { if (!settled) { settled = true; cleanup(); resolve(); } };
     const fail = () => { if (!settled) { settled = true; cleanup(); reject(new Error('The video could not be loaded. Check the URL and browser access.')); } };
@@ -953,7 +953,7 @@ function renderSourceServers(result, detail) {
   els.sourcesResults.replaceChildren();
   const header = document.createElement('p');
   header.className = 'input-help';
-  header.textContent = `${result.title} — choose a server to share with the room.`;
+  header.textContent = `${result.title} — pick a server. Direct plays in the synced player; others load as embeds.`;
   els.sourcesResults.append(header);
   (detail.embedServers || []).forEach((server) => {
     const card = document.createElement('article');
@@ -964,20 +964,55 @@ function renderSourceServers(result, detail) {
     copy.append(title);
     const actions = document.createElement('div');
     actions.className = 'discover-actions';
-    const use = document.createElement('button');
-    use.type = 'button';
-    use.textContent = 'Watch';
-    use.addEventListener('click', () => {
+    const direct = document.createElement('button');
+    direct.type = 'button';
+    direct.textContent = 'Play direct (synced)';
+    direct.addEventListener('click', () => playSourceDirect(result, detail, server));
+    const embed = document.createElement('button');
+    embed.type = 'button';
+    embed.textContent = 'Watch embed';
+    embed.addEventListener('click', () => {
       shareMedia({
         id: randomId(), kind: 'embed', url: server.url,
         title: `${result.title} · ${server.name}`,
         poster: detail.poster || '',
       });
     });
-    actions.append(use);
+    actions.append(direct, embed);
     card.append(copy, actions);
     els.sourcesResults.append(card);
   });
+}
+
+/** Resolve a detail page to a direct stream and share it as synced url media. */
+async function playSourceDirect(result, detail, server) {
+  const card = document.createElement('p');
+  card.className = 'input-help';
+  card.textContent = 'Resolving direct stream…';
+  els.sourcesResults.replaceChildren(card);
+  try {
+    const response = await fetch(`/api/sources/resolve?url=${encodeURIComponent(result.url)}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not resolve stream');
+    if (data.type !== 'direct' || !data.url) throw new Error('No direct stream available — try Watch embed');
+    const proxyUrl = `/api/stream?u=${encodeURIComponent(data.url)}&ref=${encodeURIComponent(data.referer || '')}`;
+    shareMedia({
+      id: randomId(), kind: 'url', url: proxyUrl,
+      hls: data.streamKind === 'hls',
+      title: `${result.title} · ${data.label || 'direct'}`,
+      poster: detail.poster || '',
+    });
+    if (data.subtitles && data.subtitles.length) {
+      const track = data.subtitles.find((sub) => /English/i.test(sub.label)) || data.subtitles[0];
+      showToast(`${data.subtitles.length} subtitles available (showing ${track.label})`);
+    }
+  } catch (error) {
+    els.sourcesResults.replaceChildren();
+    const message = document.createElement('p');
+    message.className = 'input-help';
+    message.textContent = error.message;
+    els.sourcesResults.append(message);
+  }
 }
 
 els.createRoomBtn.addEventListener('click', createRoom);

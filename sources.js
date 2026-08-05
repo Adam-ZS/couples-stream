@@ -33,6 +33,10 @@ const EMBED_HOSTS = Object.freeze([
   'vidcore.net',
   'player.vidzee.wtf',
   '111movies.com',
+  'player.vidlove.cc',
+  'ballerinacappuccinalovestungtungtungsahur.com',
+  'c.ballerinacappuccinalovestungtungtungsahur.com',
+  'cache.vdrk.site',
 ]);
 
 const UA =
@@ -229,12 +233,110 @@ async function resolveGeneric(embedUrl, referer) {
   return null;
 }
 
+/**
+ * Resolve a title via the vidlove/ballerina API (111movies / vidlove embeds).
+ *
+ * The ballerina /movie endpoint returns a signed stream URL plus quality
+ * variants, and /subtitles/movie/{id} returns VTT tracks. Both respond to a
+ * plain fetch when the request carries browser-like headers (the site's API
+ * gateway accepts standard Sec-Fetch headers; no cookies or tokens required
+ * for the JSON endpoints themselves).
+ */
+const BALLERINA_BASE = 'https://ballerinacappuccinalovestungtungtungsahur.com';
+const VIDLOVE_REFERER = 'https://player.vidlove.cc/';
+
+function browserHeaders(referer) {
+  return {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    Accept: 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    Referer: referer || VIDLOVE_REFERER,
+    Origin: referer ? (() => { try { return new URL(referer).origin; } catch { return 'https://player.vidlove.cc'; } })() : 'https://player.vidlove.cc',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'cross-site',
+  };
+}
+
+async function ballerinaJson(path, referer) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(BALLERINA_BASE + path, {
+      headers: browserHeaders(referer),
+      signal: controller.signal,
+      redirect: 'follow',
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Resolve a vidlove-style embed (111movies.com/movie/ttXXXX, player.vidlove.cc)
+ * into a direct MP4 stream + subtitle tracks.
+ *
+ * @param {string} tmdbId TMDB movie id (from the fmovie Servers blob)
+ * @param {string} [imdbId] optional IMDb id (used as fallback title check)
+ * @returns {Promise<object|null>} { streamUrl, qualities, subtitles, referer }
+ */
+async function resolveVidlove(tmdbId, imdbId = '') {
+  if (!tmdbId) return null;
+  // Try each backend in order — not every title exists on every source.
+  for (const backend of ['moviebox', 'vidapi', 'ipcloud']) {
+    const movie = await ballerinaJson(`/movie?id=${encodeURIComponent(tmdbId)}&mode=json&sources=${backend}`, VIDLOVE_REFERER);
+    if (!movie || !movie.source || !movie.source.url) continue;
+    const subtitles = await ballerinaJson(`/subtitles/movie/${encodeURIComponent(tmdbId)}`, VIDLOVE_REFERER);
+    return {
+      type: 'direct',
+      label: String(movie.source.label || 'MovieBox'),
+      url: movie.source.url,
+      qualities: Array.isArray(movie.source.qualities) ? movie.source.qualities : [],
+      subtitles: Array.isArray(subtitles) ? subtitles : [],
+      referer: VIDLOVE_REFERER,
+    };
+  }
+  return null;
+}
+
+/** Parse a TMDB id out of a Servers blob / detail object. */
+function tmdbFromServers(blob) {
+  if (!blob) return '';
+  return String(blob.tmdbId || blob.id || '');
+}
+
+/**
+ * Resolve the best playable source for a detail object. Tries the
+ * vidlove/ballerina direct-stream path first (real pause-synced MP4 + subs),
+ * then falls back to embed URL resolution per host.
+ */
+async function resolveDetail(detail) {
+  if (!detail) return { ok: false, error: 'No detail' };
+  const tmdbId = tmdbFromServers(detail);
+  if (tmdbId) {
+    const direct = await resolveVidlove(tmdbId, detail.imdbId);
+    if (direct) return { ok: true, ...direct };
+  }
+  for (const embed of detail.embedServers || []) {
+    const resolved = await resolveEmbed(embed);
+    if (resolved) return { ok: true, ...resolved, embedUrl: embed.url };
+  }
+  return { ok: false, error: 'No playable source found' };
+}
+
 module.exports = {
   SOURCES,
   EMBED_HOSTS,
   searchSite,
   detailPage,
   resolveEmbed,
+  resolveDetail,
+  resolveVidlove,
   hostnameOf,
   cleanText,
   allowedHosts() {
