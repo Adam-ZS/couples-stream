@@ -67,6 +67,210 @@ function clampNumber(value, min, max, fallback = min) {
   return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
 }
 
+// --- Forbidden Love HLS relay -------------------------------------------------
+// Linux IPTV-facing relay. SS IPTV in the GFW-adjacent UAE region can't reach
+// interkh CDN segments (410 geo-gate): the relay fetches everything server-side
+// with a RU/CIS X-Forwarded-For and hands a rewritten manifest/segments back.
+const HLS_RU_XFF = { 'X-Forwarded-For': '178.67.222.112' };
+const HLS_KP_ID = '491522';
+const HLS_EMBED_SOURCES = [
+  `https://api.delivembd.ws/embed/kp/${HLS_KP_ID}`,
+  `https://api1646689770.delivembd.ws/embed/kp/${HLS_KP_ID}`,
+];
+const HLS_CACHE_TTL_MS = 45 * 60 * 1000;
+const HLS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
+const HLS_EMBED_RE = /\.delivembd\.ws$/i;
+const HLS_INTERKH_RE = /[a-z0-9-]+\.interkh\.com$/i;
+
+let hlsEpisodes = [];
+let hlsFetchedAt = 0;
+let hlsFetching = null;
+
+function isHlsPlaylist(contentType, bodyStart) {
+  return /m3u8|vnd\.apple\.mpegurl|x-mpegurl/i.test(contentType || '')
+    || bodyStart.startsWith('#EXTM3U');
+}
+
+function extractSeasonsJson(html) {
+  const marker = 'seasons:';
+  const index = html.indexOf(marker);
+  if (index < 0) return null;
+  const start = html.indexOf('[', index);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let end = -1;
+  for (let i = start; i < html.length; i += 1) {
+    const ch = html[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"' || ch === '\'') inString = false;
+      continue;
+    }
+    if (ch === '"' || ch === '\'') { inString = true; continue; }
+    if (ch === '[') depth += 1;
+    else if (ch === ']') { depth -= 1; if (depth === 0) { end = i + 1; break; } }
+  }
+  if (end < 0) return null;
+  const raw = html.slice(start, end).replace(/,\s*([\]}])/g, '$1');
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function flattenHlsEpisodes(seasons) {
+  const episodes = [];
+  for (const season of seasons || []) {
+    for (const episode of season?.episodes || []) {
+      if (episode && typeof episode.hls === 'string' && /^https?:\/\//.test(episode.hls)) {
+        episodes.push(episode.hls);
+      }
+    }
+  }
+  return episodes;
+}
+
+async function refreshHlsEpisodes() {
+  if (hlsFetching) return hlsFetching;
+  hlsFetching = (async () => {
+    for (const source of HLS_EMBED_SOURCES) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15_000);
+      try {
+        const response = await fetch(source, {
+          headers: { 'User-Agent': HLS_UA, Referer: 'https://kinozed.org/', ...HLS_RU_XFF },
+          signal: controller.signal,
+        });
+        if (!response.ok) continue;
+        const html = await response.text();
+        const seasons = extractSeasonsJson(html);
+        if (!seasons) continue;
+        const episodes = flattenHlsEpisodes(seasons);
+        if (!episodes.length) continue;
+        hlsEpisodes = episodes;
+        hlsFetchedAt = Date.now();
+        return;
+      } catch {
+        /* try next source */
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  })();
+  try {
+    await hlsFetching;
+  } finally {
+    hlsFetching = null;
+  }
+}
+
+async function hlsMasterForEpisode(number) {
+  if (!hlsEpisodes.length || Date.now() - hlsFetchedAt > HLS_CACHE_TTL_MS) {
+    try { await refreshHlsEpisodes(); } catch { /* keep stale cache */ }
+  }
+  return hlsEpisodes[Number(number) - 1] || null;
+}
+
+function rewriteHlsPlaylist(text, baseUrl) {
+  const base = new URL(baseUrl);
+  const rewriteUri = (uri) => {
+    if (typeof uri !== 'string' || !uri) return uri;
+    try {
+      const absolute = new URL(uri, base).toString();
+      if (!/^https?:\/\//.test(absolute)) return uri;
+      return `/hls/r/${Buffer.from(absolute).toString('base64url')}`;
+    } catch {
+      return uri;
+    }
+  };
+  const lines = [];
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#EXT-X-MEDIA')) {
+      lines.push(line.replace(/URI="([^"]*)"/g, (_, uri) => `URI="${rewriteUri(uri)}"`));
+      continue;
+    }
+    if (!trimmed || trimmed.startsWith('#')) { lines.push(line); continue; }
+    try {
+      const absolute = new URL(trimmed, base).toString();
+      if (!/^https?:\/\//.test(absolute)) { lines.push(line); continue; }
+      lines.push(`/hls/r/${Buffer.from(absolute).toString('base64url')}`);
+    } catch {
+      lines.push(line);
+    }
+  }
+  return lines.join('\n');
+}
+
+async function forwardHlsUpstream(req, res, target, timeoutMs = 25_000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const headers = { 'User-Agent': HLS_UA, ...HLS_RU_XFF };
+    if (req.headers.range) headers.Range = req.headers.range;
+    const upstream = await fetch(target, { headers, signal: controller.signal, redirect: 'follow' });
+    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+    if (isHlsPlaylist(contentType, '')) {
+      const body = await upstream.text();
+      const rewritten = rewriteHlsPlaylist(body, target);
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Content-Length': Buffer.byteLength(rewritten),
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+      });
+      return res.end(rewritten);
+    }
+    if (!upstream.body) return json(res, 502, { error: 'Upstream body missing' });
+    const streamHeaders = {
+      'Content-Type': contentType,
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+    };
+    const contentLength = upstream.headers.get('content-length');
+    const contentRange = upstream.headers.get('content-range');
+    if (contentLength !== null) streamHeaders['Content-Length'] = contentLength;
+    if (contentRange !== null) streamHeaders['Content-Range'] = contentRange;
+    streamHeaders['Accept-Ranges'] = upstream.headers.get('accept-ranges') || 'bytes';
+    res.writeHead(upstream.status === 206 ? 206 : 200, streamHeaders);
+    return Readable.fromWeb(upstream.body).pipe(res);
+  } catch (error) {
+    if (res.headersSent) {
+      res.destroy();
+      return undefined;
+    }
+    console.warn('[hls] upstream error', error.name, error.message, error.cause?.message || '');
+    return json(res, error.name === 'AbortError' ? 504 : 502, { error: error.name === 'AbortError' ? 'Upstream timed out' : 'Upstream failed' });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function handleHls(req, res, pathname) {
+  const epMatch = pathname.match(/^\/hls\/ep\/(\d{1,3})\/?$/);
+  if (epMatch) {
+    const number = Number(epMatch[1]);
+    if (number >= 1 && number <= 200) {
+      const master = await hlsMasterForEpisode(number);
+      if (master) return forwardHlsUpstream(req, res, master);
+    }
+    return json(res, 404, { error: 'Unknown episode' });
+  }
+
+  const relayMatch = pathname.match(/^\/hls\/r\/([A-Za-z0-9_-]{4,})$/);
+  if (relayMatch) {
+    let target;
+    try { target = Buffer.from(relayMatch[1], 'base64url').toString('utf8'); } catch { return json(res, 400, { error: 'Bad target' }); }
+    if (!/^https?:\/\//.test(target)) return json(res, 400, { error: 'Bad target' });
+    let host;
+    try { host = new URL(target).hostname; } catch { return json(res, 400, { error: 'Bad target' }); }
+    if (!HLS_INTERKH_RE.test(host)) return json(res, 403, { error: 'Host not allowed' });
+    return forwardHlsUpstream(req, res, target);
+  }
+
+  return json(res, 404, { error: 'Not found' });
+}
+
 function normalizeHttpUrl(value, { allowYouTube = false } = {}) {
   try {
     const url = new URL(String(value));
@@ -963,6 +1167,18 @@ function createServer(options = {}) {
         } finally {
           clearTimeout(timer);
         }
+      }
+
+      if (req.method === 'GET' && pathname.startsWith('/hls/')) {
+        return handleHls(req, res, pathname, url);
+      }
+
+      // HLS relay for the Forbidden Love IPTV playlist (geo-gate bypass for
+      // interkh segments). Isolated under /hls/, untouched by the app UI.
+      if (pathname.startsWith('/hls/')) {
+        const hlsIp = requestIp(req);
+        if (!apiLimiter(hlsIp)) return json(res, 429, { error: 'Too many requests' });
+        return handleHls(req, res, pathname);
       }
 
       if (pathname.startsWith('/api/')) return json(res, 404, { error: 'Not found' });
