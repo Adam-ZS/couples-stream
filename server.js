@@ -77,8 +77,6 @@ const HLS_EMBED_SOURCES = [
   `https://api.delivembd.ws/embed/kp/${HLS_KP_ID}`,
   `https://api1646689770.delivembd.ws/embed/kp/${HLS_KP_ID}`,
 ];
-const HLS_TOKENS_URL = 'https://raw.githubusercontent.com/Adam-ZS/forbidden-love-iptv/main/tokens.json';
-const HLS_TOKENS_TTL_MS = 6 * 60 * 60 * 1000;
 const HLS_CACHE_TTL_MS = 45 * 60 * 1000;
 const HLS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 const HLS_EMBED_RE = /\.delivembd\.ws$/i;
@@ -87,47 +85,6 @@ const HLS_INTERKH_RE = /[a-z0-9-]+\.interkh\.com$/i;
 let hlsEpisodes = [];
 let hlsFetchedAt = 0;
 let hlsFetching = null;
-let hlsScrapeError = '';
-let hlsTokensLoaded = false;
-
-function hlsScrapeInfo() {
-  return {
-    episodes: hlsEpisodes.length,
-    fetchedAgoSec: hlsEpisodes.length ? Math.round((Date.now() - hlsFetchedAt) / 1000) : -1,
-    lastError: hlsScrapeError || null,
-    source: hlsTokensLoaded ? 'tokens.json' : 'embed',
-  };
-}
-
-// The embed host geo-blocks by real source IP (Render's US egress gets 410),
-// so prefer the doctor's published tokens.json (fresh interkh masters) and
-// only fall back to scraping the embed when that's unavailable.
-async function loadTokensJson() {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15_000);
-  try {
-    const response = await fetch(HLS_TOKENS_URL, {
-      headers: { 'User-Agent': HLS_UA },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`tokens.json HTTP ${response.status}`);
-    const data = await response.json();
-    const episodes = (data.episodes || [])
-      .map((ep) => (typeof ep === 'string' ? ep : ep?.url))
-      .filter((url) => typeof url === 'string' && /^https?:\/\//.test(url) && HLS_INTERKH_RE.test(new URL(url).hostname));
-    if (!episodes.length) throw new Error('tokens.json has no playable episodes');
-    hlsEpisodes = episodes;
-    hlsFetchedAt = Date.now();
-    hlsScrapeError = '';
-    hlsTokensLoaded = true;
-    return true;
-  } catch (error) {
-    hlsScrapeError = error.message;
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 function isHlsPlaylist(contentType, bodyStart) {
   return /m3u8|vnd\.apple\.mpegurl|x-mpegurl/i.test(contentType || '')
@@ -176,7 +133,6 @@ function flattenHlsEpisodes(seasons) {
 async function refreshHlsEpisodes() {
   if (hlsFetching) return hlsFetching;
   hlsFetching = (async () => {
-    const errors = [];
     for (const source of HLS_EMBED_SOURCES) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15_000);
@@ -185,32 +141,21 @@ async function refreshHlsEpisodes() {
           headers: { 'User-Agent': HLS_UA, Referer: 'https://kinozed.org/', ...HLS_RU_XFF },
           signal: controller.signal,
         });
-        if (!response.ok) {
-          errors.push(`${source} -> HTTP ${response.status}`);
-          continue;
-        }
+        if (!response.ok) continue;
         const html = await response.text();
         const seasons = extractSeasonsJson(html);
-        if (!seasons) {
-          errors.push(`${source} -> no seasons array`);
-          continue;
-        }
+        if (!seasons) continue;
         const episodes = flattenHlsEpisodes(seasons);
-        if (!episodes.length) {
-          errors.push(`${source} -> 0 playable episodes`);
-          continue;
-        }
+        if (!episodes.length) continue;
         hlsEpisodes = episodes;
         hlsFetchedAt = Date.now();
-        hlsScrapeError = '';
         return;
-      } catch (error) {
-        errors.push(`${source} -> ${error.message}`);
+      } catch {
+        /* try next source */
       } finally {
         clearTimeout(timer);
       }
     }
-    hlsScrapeError = errors.join(' | ') || 'all sources failed';
   })();
   try {
     await hlsFetching;
@@ -220,10 +165,7 @@ async function refreshHlsEpisodes() {
 }
 
 async function hlsMasterForEpisode(number) {
-  if (!hlsEpisodes.length || Date.now() - hlsFetchedAt > HLS_TOKENS_TTL_MS) {
-    if (await loadTokensJson()) {
-      return hlsEpisodes[Number(number) - 1] || null;
-    }
+  if (!hlsEpisodes.length || Date.now() - hlsFetchedAt > HLS_CACHE_TTL_MS) {
     try { await refreshHlsEpisodes(); } catch { /* keep stale cache */ }
   }
   return hlsEpisodes[Number(number) - 1] || null;
@@ -260,12 +202,11 @@ function rewriteHlsPlaylist(text, baseUrl) {
   return lines.join('\n');
 }
 
-async function forwardHlsUpstream(req, res, target, timeoutMs = 25_000, xffOverride = null) {
+async function forwardHlsUpstream(req, res, target, timeoutMs = 25_000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const headers = { 'User-Agent': HLS_UA, ...HLS_RU_XFF };
-    if (xffOverride) headers['X-Forwarded-For'] = xffOverride;
     if (req.headers.range) headers.Range = req.headers.range;
     const upstream = await fetch(target, { headers, signal: controller.signal, redirect: 'follow' });
     const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
@@ -305,9 +246,7 @@ async function forwardHlsUpstream(req, res, target, timeoutMs = 25_000, xffOverr
   }
 }
 
-async function handleHls(req, res, pathname, url) {
-  if (pathname === '/hls/info') return json(res, 200, { ok: true, ...hlsScrapeInfo() });
-
+async function handleHls(req, res, pathname) {
   const epMatch = pathname.match(/^\/hls\/ep\/(\d{1,3})\/?$/);
   if (epMatch) {
     const number = Number(epMatch[1]);
@@ -326,8 +265,7 @@ async function handleHls(req, res, pathname, url) {
     let host;
     try { host = new URL(target).hostname; } catch { return json(res, 400, { error: 'Bad target' }); }
     if (!HLS_INTERKH_RE.test(host)) return json(res, 403, { error: 'Host not allowed' });
-    const xffOverride = url.searchParams.get('xff') || null;
-    return forwardHlsUpstream(req, res, target, 25_000, xffOverride);
+    return forwardHlsUpstream(req, res, target);
   }
 
   return json(res, 404, { error: 'Not found' });
