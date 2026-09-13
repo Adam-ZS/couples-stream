@@ -77,6 +77,8 @@ const HLS_EMBED_SOURCES = [
   `https://api.delivembd.ws/embed/kp/${HLS_KP_ID}`,
   `https://api1646689770.delivembd.ws/embed/kp/${HLS_KP_ID}`,
 ];
+const HLS_TOKENS_URL = 'https://raw.githubusercontent.com/Adam-ZS/forbidden-love-iptv/main/tokens.json';
+const HLS_TOKENS_TTL_MS = 6 * 60 * 60 * 1000;
 const HLS_CACHE_TTL_MS = 45 * 60 * 1000;
 const HLS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 const HLS_EMBED_RE = /\.delivembd\.ws$/i;
@@ -86,13 +88,45 @@ let hlsEpisodes = [];
 let hlsFetchedAt = 0;
 let hlsFetching = null;
 let hlsScrapeError = '';
+let hlsTokensLoaded = false;
 
 function hlsScrapeInfo() {
   return {
     episodes: hlsEpisodes.length,
     fetchedAgoSec: hlsEpisodes.length ? Math.round((Date.now() - hlsFetchedAt) / 1000) : -1,
     lastError: hlsScrapeError || null,
+    source: hlsTokensLoaded ? 'tokens.json' : 'embed',
   };
+}
+
+// The embed host geo-blocks by real source IP (Render's US egress gets 410),
+// so prefer the doctor's published tokens.json (fresh interkh masters) and
+// only fall back to scraping the embed when that's unavailable.
+async function loadTokensJson() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(HLS_TOKENS_URL, {
+      headers: { 'User-Agent': HLS_UA },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`tokens.json HTTP ${response.status}`);
+    const data = await response.json();
+    const episodes = (data.episodes || [])
+      .map((ep) => (typeof ep === 'string' ? ep : ep?.url))
+      .filter((url) => typeof url === 'string' && /^https?:\/\//.test(url) && HLS_INTERKH_RE.test(new URL(url).hostname));
+    if (!episodes.length) throw new Error('tokens.json has no playable episodes');
+    hlsEpisodes = episodes;
+    hlsFetchedAt = Date.now();
+    hlsScrapeError = '';
+    hlsTokensLoaded = true;
+    return true;
+  } catch (error) {
+    hlsScrapeError = error.message;
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function isHlsPlaylist(contentType, bodyStart) {
@@ -186,7 +220,10 @@ async function refreshHlsEpisodes() {
 }
 
 async function hlsMasterForEpisode(number) {
-  if (!hlsEpisodes.length || Date.now() - hlsFetchedAt > HLS_CACHE_TTL_MS) {
+  if (!hlsEpisodes.length || Date.now() - hlsFetchedAt > HLS_TOKENS_TTL_MS) {
+    if (await loadTokensJson()) {
+      return hlsEpisodes[Number(number) - 1] || null;
+    }
     try { await refreshHlsEpisodes(); } catch { /* keep stale cache */ }
   }
   return hlsEpisodes[Number(number) - 1] || null;
