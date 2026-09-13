@@ -85,6 +85,15 @@ const HLS_INTERKH_RE = /[a-z0-9-]+\.interkh\.com$/i;
 let hlsEpisodes = [];
 let hlsFetchedAt = 0;
 let hlsFetching = null;
+let hlsScrapeError = '';
+
+function hlsScrapeInfo() {
+  return {
+    episodes: hlsEpisodes.length,
+    fetchedAgoSec: hlsEpisodes.length ? Math.round((Date.now() - hlsFetchedAt) / 1000) : -1,
+    lastError: hlsScrapeError || null,
+  };
+}
 
 function isHlsPlaylist(contentType, bodyStart) {
   return /m3u8|vnd\.apple\.mpegurl|x-mpegurl/i.test(contentType || '')
@@ -133,6 +142,7 @@ function flattenHlsEpisodes(seasons) {
 async function refreshHlsEpisodes() {
   if (hlsFetching) return hlsFetching;
   hlsFetching = (async () => {
+    const errors = [];
     for (const source of HLS_EMBED_SOURCES) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15_000);
@@ -141,21 +151,32 @@ async function refreshHlsEpisodes() {
           headers: { 'User-Agent': HLS_UA, Referer: 'https://kinozed.org/', ...HLS_RU_XFF },
           signal: controller.signal,
         });
-        if (!response.ok) continue;
+        if (!response.ok) {
+          errors.push(`${source} -> HTTP ${response.status}`);
+          continue;
+        }
         const html = await response.text();
         const seasons = extractSeasonsJson(html);
-        if (!seasons) continue;
+        if (!seasons) {
+          errors.push(`${source} -> no seasons array`);
+          continue;
+        }
         const episodes = flattenHlsEpisodes(seasons);
-        if (!episodes.length) continue;
+        if (!episodes.length) {
+          errors.push(`${source} -> 0 playable episodes`);
+          continue;
+        }
         hlsEpisodes = episodes;
         hlsFetchedAt = Date.now();
+        hlsScrapeError = '';
         return;
-      } catch {
-        /* try next source */
+      } catch (error) {
+        errors.push(`${source} -> ${error.message}`);
       } finally {
         clearTimeout(timer);
       }
     }
+    hlsScrapeError = errors.join(' | ') || 'all sources failed';
   })();
   try {
     await hlsFetching;
@@ -247,6 +268,8 @@ async function forwardHlsUpstream(req, res, target, timeoutMs = 25_000) {
 }
 
 async function handleHls(req, res, pathname) {
+  if (pathname === '/hls/info') return json(res, 200, { ok: true, ...hlsScrapeInfo() });
+
   const epMatch = pathname.match(/^\/hls\/ep\/(\d{1,3})\/?$/);
   if (epMatch) {
     const number = Number(epMatch[1]);
