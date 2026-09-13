@@ -260,11 +260,12 @@ function rewriteHlsPlaylist(text, baseUrl) {
   return lines.join('\n');
 }
 
-async function forwardHlsUpstream(req, res, target, timeoutMs = 25_000) {
+async function forwardHlsUpstream(req, res, target, timeoutMs = 25_000, xffOverride = null) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const headers = { 'User-Agent': HLS_UA, ...HLS_RU_XFF };
+    if (xffOverride) headers['X-Forwarded-For'] = xffOverride;
     if (req.headers.range) headers.Range = req.headers.range;
     const upstream = await fetch(target, { headers, signal: controller.signal, redirect: 'follow' });
     const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
@@ -304,7 +305,7 @@ async function forwardHlsUpstream(req, res, target, timeoutMs = 25_000) {
   }
 }
 
-async function handleHls(req, res, pathname) {
+async function handleHls(req, res, pathname, url) {
   if (pathname === '/hls/info') return json(res, 200, { ok: true, ...hlsScrapeInfo() });
 
   const epMatch = pathname.match(/^\/hls\/ep\/(\d{1,3})\/?$/);
@@ -325,7 +326,8 @@ async function handleHls(req, res, pathname) {
     let host;
     try { host = new URL(target).hostname; } catch { return json(res, 400, { error: 'Bad target' }); }
     if (!HLS_INTERKH_RE.test(host)) return json(res, 403, { error: 'Host not allowed' });
-    return forwardHlsUpstream(req, res, target);
+    const xffOverride = url.searchParams.get('xff') || null;
+    return forwardHlsUpstream(req, res, target, 25_000, xffOverride);
   }
 
   return json(res, 404, { error: 'Not found' });
